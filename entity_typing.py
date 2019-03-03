@@ -412,13 +412,11 @@ class TestConfig:
         args.word_dim = 30
         args.hidden_dim = 30
         args.attention_dim = 10
-        
         args.label_dim = 10
         args.label_word_dim = 30
         args.batch_size = 10
         args.epoch = 20
         args.use_position_embedding = False
-        
         args.data_dir = '../../data/FIGER'
         # args.pretrained_path = '/home/user_data/lijh/data/english_embeddings/glove.840B.300d.txt'
         args.word_pretrained_path = None
