@@ -7,6 +7,7 @@ from collections import defaultdict
 import torch
 import torch.nn as nn
 import dill
+import linecache
 
 
 import numpy as np
@@ -52,6 +53,7 @@ class EntityTypingDataset(Dataset):
         self.share_vocab = share_vocab
         self.vocab = vocab
         self.dataset = self.read_file(filename,vocab)
+        self.filename = filename
         self.batch_size = batch_size
 
     def read_file(self,filename,vocab):
@@ -60,6 +62,7 @@ class EntityTypingDataset(Dataset):
             map(lambda x: x.replace('/', ' ').replace('_',' ').split(), list(sorted(vocab.ltoi, key=vocab.ltoi.get))))
         self.label_dict = defaultdict(lambda : [])
         self.label_set = set()
+        self.length = 0
         cnt = 0
         with open(filename,'r') as f:
             for line in f:
@@ -87,15 +90,29 @@ class EntityTypingDataset(Dataset):
                 if cnt % 1000 == 0:
                     print('\r{}'.format(cnt),end='')
                 cnt += 1
+                self.length += 1
 
-        return dataset
+    def process_line(self,line):
+        mention,labels,left_context,right_context,_= line.rstrip().split('\t')
+        example = dict()
+        example['mention'] = mention.split()
+        example['labels'] = labels.split()
+        example['left_context'] = left_context.split()
+        example['right_context'] = right_context.split()
+
+        mention = [self.vocab.stoi[word] for word in example['mention']]
+        left_context = [self.vocab.stoi[word] for word in example['left_context']]
+        right_context = [self.vocab.stoi[word] for word in example['right_context']]
+
+        instance = dict()
+        instance['mention'] = mention
+        instance['labels'] = labels.split()
+        instance['left_context'] = left_context
+        instance['right_context'] = right_context
+        return instance
 
     def get_label_set(self):
-        label_set = set()
-        for instance in self.dataset:
-            for label in instance['labels']:
-                label_set.add(label)
-        return label_set
+        return self.label_set
 
     def get_subset(self,labels,mode):
         idxs = []
@@ -110,10 +127,11 @@ class EntityTypingDataset(Dataset):
         return torch.utils.data.Subset(self,list(set(idxs)))
 
     def __len__(self):
-        return len(self.dataset)
+        return self.length
 
     def __getitem__(self,item):
-        instance = self.dataset[item]
+        line = linecache.getline(self.filename,item+1)
+        instance = self.process_line(line)
         instance['labels_idx'] = scatter([self.vocab.ltoi[label] for label in instance['labels']],
                                      len(self.vocab.ltoi))
         if self.share_vocab:
@@ -409,9 +427,15 @@ def main(args):
     import time
     start_time = time.time()
     vocab = torch.load(args.vocab_pth,pickle_module=dill)
-    train_dataset = torch.load(args.train_dataset_pth,pickle_module=dill)
-    dev_dataset = torch.load(args.dev_dataset_pth,pickle_module=dill)
-    test_dataset = torch.load(args.test_dataset_pth,pickle_module=dill)
+    # train_dataset = torch.load(args.train_dataset_pth,pickle_module=dill)
+    # dev_dataset = torch.load(args.dev_dataset_pth,pickle_module=dill)
+    # test_dataset = torch.load(args.test_dataset_pth,pickle_module=dill)
+    filepaths = ['train.tsv', 'dev.tsv', 'test.tsv']
+    for i in range(len(filepaths)):
+        filepaths[i] = os.path.join(args.data_dir, filepaths[i])
+    train_dataset = EntityTypingDataset(filepaths[0],vocab,args.batch_size,args.share_vocab)
+    dev_dataset = EntityTypingDataset(filepaths[1],vocab,args.batch_size,args.share_vocab)
+    test_dataset = EntityTypingDataset(filepaths[2], vocab, args.batch_size, args.share_vocab)
     end_time = time.time()
     print('Loaded dataset in {:.2f}s '.format(end_time-start_time))
 
@@ -430,7 +454,7 @@ def main(args):
         print(' Using random initialized label word embedding.')
 
     if args.mode == 'zero-shot':
-
+        train_labels = train_dataset.get_label_set()
         test_labels = test_dataset.get_label_set()
         folds = generate_folds(test_labels)
 
@@ -440,11 +464,17 @@ def main(args):
             dev_subset = dev_dataset.get_subset(fold,mode='unseen')
             test_subset = test_dataset.get_subset(fold,mode='seen')
 
-            print('Total Training Instances :{}'.format(len(train_subset)))
-            print('Total Training labels :{}'.format(len(train_subset.get_label_set())))
-            print('Total Test Instances: {}'.format(len(test_subset)))
+            with open('fold/fold{}.txt'.format(str(i)),'w') as f:
+                f.write('Training Subset labels: {}'.format(' '.join(list(train_labels - set(fold)))) + '\n')
+                f.write('Test Subset labels: {}'.format(' '.join(fold)))
 
-            train(args,train_subset,dev_subset,test_subset,vocab)
+            # print('Total Training Instances :{}'.format(len(train_subset)))
+            # print('Total Training labels :{}'.format(len(train_subset.get_label_set())))
+            # print('Total Test Instances: {}'.format(len(test_subset)))
+
+            test_acc = train(args,train_subset,dev_subset,test_subset,vocab)
+            with open('fold/fold{}.txt'.format(str(i)),'a') as f:
+                f.write('Test Acc :({:.2f},{:.2f},{:.2f}'.format(test_acc[0],test_acc[1],test_acc[2]))
 
     elif args.mode == 'supervised':
         train(args,train_dataset,dev_dataset,test_dataset,vocab)
@@ -452,9 +482,9 @@ def main(args):
 
 def train(args,train_dataset,dev_dataset,test_dataset,vocab):
 
-    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=False,num_workers=0,collate_fn=collate_fn)
-    dev_iter = DataLoader(dataset=dev_dataset,batch_size=args.batch_size,shuffle=False,num_workers=0,collate_fn=collate_fn)
-    test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=False,num_workers=0,collate_fn=collate_fn)
+    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=False,num_workers=8,collate_fn=collate_fn)
+    dev_iter = DataLoader(dataset=dev_dataset,batch_size=args.batch_size,shuffle=False,num_workers=8,collate_fn=collate_fn)
+    test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=False,num_workers=8,collate_fn=collate_fn)
 
     args.n_words = len(vocab.stoi)
     args.n_labels = len(vocab.ltoi)
@@ -472,14 +502,15 @@ def train(args,train_dataset,dev_dataset,test_dataset,vocab):
         print(' \nEpoch {}, Dev Acc : ({:.2f},{:.2f},{:.2f})'.format(epoch,dev_acc[0],dev_acc[1],dev_acc[2]))
         if dev_acc[0] > best_acc:
             best_acc = dev_acc[0]
-            torch.save(model.state_dict(),'model.pth')
+            torch.save(model.state_dict(),args.save_pth)
 
     model = Model(args).to(device)
-    model.load_state_dict(torch.load('model.pth'))
+    model.load_state_dict(torch.load(args.save_pth))
 
     dev_acc = model.evaluate(dev_iter)
     test_acc = model.evaluate(test_iter)
     print('Dev Acc: ({:.2f},{:.2f},{:.2f}), Test Acc :({:.2f},{:.2f},{:.2f})'.format(dev_acc[0],dev_acc[1],dev_acc[2],test_acc[0],test_acc[1],test_acc[2]))
+    return test_acc
 
 class TestConfig:
 
@@ -532,6 +563,8 @@ class DefaultConfig:
         args.dev_dataset_pth = './data/FIGER/share_vocab/dev.pkl'
         args.test_dataset_pth = './data/FIGER/share_vocab/test.pkl'
 
+        args.save_pth = 'zero_shot.pth'
+
         args.freeze = True
 
 if __name__ == '__main__':
@@ -539,6 +572,7 @@ if __name__ == '__main__':
     if sys.argv[1] == '--test':
         args = TestConfig()
         args.glove_pth = None
+        args.mode = 'supervised'
         main(args)
     elif sys.argv[1] == '--supervised':
         args = DefaultConfig()
