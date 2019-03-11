@@ -1,11 +1,14 @@
 import sys
 sys.path.append('..')
 
-from torchtext import data
+
 import os
+from collections import defaultdict
 import torch
 import torch.nn as nn
 import dill
+import linecache
+
 
 import numpy as np
 from lib.module import LSTMEncoder
@@ -16,6 +19,7 @@ from allennlp.nn.util import add_positional_features,weighted_sum
 from evaluate  import strict,loose_macro,loose_micro
 from torch.utils.data import Dataset, DataLoader
 from tensorboardX import SummaryWriter
+
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -42,22 +46,27 @@ def scatter(labels,max_len):
     return array
 
 
-
 class EntityTypingDataset(Dataset):
 
-    def __init__(self,filename,vocab,batch_size):
+    def __init__(self,filename,vocab,batch_size,share_vocab):
 
-        self.dataset = self.read_file(filename,vocab)
-        self.batch_size = batch_size
+        self.share_vocab = share_vocab
         self.vocab = vocab
+        self.dataset = self.read_file(filename,vocab)
+        self.filename = filename
+        self.batch_size = batch_size
 
     def read_file(self,filename,vocab):
         dataset = []
-        self.label_set = list(map(lambda x: x.replace('/',' ').split(),list(sorted(vocab.ltoi,key=vocab.ltoi.get))))
+        self.full_label_set = list(
+            map(lambda x: x.replace('/', ' ').replace('_',' ').split(), list(sorted(vocab.ltoi, key=vocab.ltoi.get))))
+        self.label_dict = defaultdict(lambda : [])
+        self.label_set = set()
+        self.length = 0
         cnt = 0
         with open(filename,'r') as f:
             for line in f:
-                mention,labels,left_context,right_context= line.rstrip().split('\t')
+                mention,labels,left_context,right_context,_= line.rstrip().split('\t')
                 example = dict()
                 example['mention'] = mention.split()
                 example['labels'] = labels.split()
@@ -68,27 +77,69 @@ class EntityTypingDataset(Dataset):
                 left_context = [vocab.stoi[word] for word in example['left_context']]
                 right_context = [vocab.stoi[word] for word in example['right_context']]
 
-
                 instance = dict()
                 instance['mention'] = mention
                 instance['labels'] = labels.split()
                 instance['left_context'] = left_context
                 instance['right_context'] = right_context
 
+                for label in labels.split():
+                    self.label_dict[label].append(cnt)
+                    self.label_set.add(label)
                 dataset.append(instance)
                 if cnt % 1000 == 0:
                     print('\r{}'.format(cnt),end='')
                 cnt += 1
+                self.length += 1
 
-        return dataset
+    def process_line(self,line):
+        mention,labels,left_context,right_context,_= line.rstrip().split('\t')
+        example = dict()
+        example['mention'] = mention.split()
+        example['labels'] = labels.split()
+        example['left_context'] = left_context.split()
+        example['right_context'] = right_context.split()
+
+        mention = [self.vocab.stoi[word] for word in example['mention']]
+        left_context = [self.vocab.stoi[word] for word in example['left_context']]
+        right_context = [self.vocab.stoi[word] for word in example['right_context']]
+
+        instance = dict()
+        instance['mention'] = mention
+        instance['labels'] = labels.split()
+        instance['left_context'] = left_context
+        instance['right_context'] = right_context
+        return instance
+
+    def get_label_set(self):
+        return self.label_set
+
+    def get_subset(self,labels,mode):
+        idxs = []
+        if mode == 'seen':
+            for label in labels:
+                idxs.extend(self.label_dict[label])
+
+        elif mode == 'unseen':
+            for key,val in self.label_dict.items():
+                if key not in labels:
+                    idxs.extend(val)
+        return torch.utils.data.Subset(self,list(set(idxs)))
 
     def __len__(self):
-        return len(self.dataset)
+        return self.length
 
     def __getitem__(self,item):
-        instance = self.dataset[item]
-        instance['labels'] = scatter([self.vocab.ltoi[label] for label in instance['labels']], len(self.vocab.ltoi))
-        instance['full_labels'] = [[self.vocab.lwtoi[word] for word in label ] for label in self.label_set]
+        line = linecache.getline(self.filename,item+1)
+        instance = self.process_line(line)
+        instance['labels_idx'] = scatter([self.vocab.ltoi[label] for label in instance['labels']],
+                                     len(self.vocab.ltoi))
+        if self.share_vocab:
+            instance['full_labels'] = [[self.vocab.stoi[word] for word in label] for label in
+                                       self.full_label_set]
+        else:
+            instance['full_labels'] = [[self.vocab.lwtoi[word] for word in label] for label in
+                                       self.full_label_set]
         return instance
 
 
@@ -103,14 +154,14 @@ def collate_fn(list_of_examples):
     mention = pad([x['mention'] for x in list_of_examples],0)
     left_context = pad([x['left_context'] for x in list_of_examples],0)
     right_context = pad([x['right_context'] for x in list_of_examples],0)
-    labels = [x['labels'] for x in list_of_examples]
+    labels = [x['labels_idx'] for x in list_of_examples]
     full_labels = pad(list_of_examples[0]['full_labels'],0)
 
-    batch['mention'] = mention
-    batch['left_context'] = left_context
-    batch['right_context'] = right_context
-    batch['full_labels'] = [full_labels for i in range(len(list_of_examples))]
-    batch['labels'] = labels
+    batch['mention'] = np.array(mention)
+    batch['left_context'] = np.array(left_context)
+    batch['right_context'] = np.array(right_context)
+    batch['full_labels'] = np.array([full_labels for i in range(len(list_of_examples))])
+    batch['labels'] = np.array(labels)
 
     return batch
 
@@ -161,15 +212,15 @@ class Model(nn.Module):
         if args.word_pretrained is None:
             self.word_embedding = nn.Embedding(args.n_words,args.word_dim,args.padding_idx)
         else:
-            self.word_embedding = nn.Embedding.from_pretrained(args.word_pretrained,freeze=False)
-
+            self.word_embedding = nn.Embedding.from_pretrained(args.word_pretrained,freeze=args.freeze)
 
         self.label_embedding = nn.Embedding(args.n_labels,args.label_dim)
 
-        if args.label_word_pretrained is None:
-            self.label_word_embedding = nn.Embedding(args.n_labelwords,args.label_word_dim,args.padding_idx)
-        else:
-            self.label_word_embedding = nn.Embedding.from_pretrained(args.label_word_pretrained,freeze=False)
+        if not args.share_vocab:
+            if args.label_word_pretrained is None:
+                self.label_word_embedding = nn.Embedding(args.n_labelwords,args.label_word_dim,args.padding_idx)
+            else:
+                self.label_word_embedding = nn.Embedding.from_pretrained(args.label_word_pretrained,freeze=args.freeze)
 
         self.mention_encoder = BagOfEmbeddingsEncoder(args)
 
@@ -177,16 +228,18 @@ class Model(nn.Module):
 
         self.label_encoder = BagOfEmbeddingsEncoder(args)
 
-
         cls_input_dim = args.word_dim + 2*args.hidden_dim
 
-        self.repre_proj = nn.Linear(cls_input_dim,args.hidden_dim,bias=False)
-
-        self.classifier = nn.Linear(1,1)
-
+        self.repre_proj = nn.Sequential(
+            nn.Linear(cls_input_dim,args.label_word_dim,bias=False),
+            nn.ReLU()
+        )
         self.hidden_dim = args.hidden_dim
+        self.label_word_dim = args.label_word_dim
 
         self.n_labels = args.n_labels
+
+        self.share_voacb = args.share_vocab
 
         self.use_position_embedding = args.use_position_embedding
         self.padding_idx = args.padding_idx
@@ -205,7 +258,7 @@ class Model(nn.Module):
         mention_repre = self.word_embedding(mention)
         mention_repre = self.mention_encoder.forward(mention_repre,mask=mention_mask)
 
-        mention_repre = mention_repre
+        mention_repre = self.dropout(mention_repre)
 
         left_context_lengths = (left_context != self.padding_idx).sum(dim=1).long().to(device)
         right_context_lengths = (right_context != self.padding_idx).sum(dim=1).long().to(device)
@@ -221,17 +274,21 @@ class Model(nn.Module):
 
         mention_repre = self.repre_proj(torch.cat([mention_repre,context_repre],dim=-1)) # bsize * hidden_dim
 
-        mention_repre = self.dropout(mention_repre)
-
         label_mask = (candidate_labels != self.padding_idx).float()
         n_classes = candidate_labels.size()[1]
         label_len = candidate_labels.size()[2]
-        label_repre = self.label_word_embedding(candidate_labels) # bsize * N_CLASSES * hidden_dim
+
+        if self.share_voacb:
+            label_repre = self.word_embedding(candidate_labels)
+        else:
+            label_repre = self.label_word_embedding(candidate_labels) # bsize * N_CLASSES * hidden_dim
         label_repre = self.label_encoder.forward(label_repre.view(bsize*n_classes,label_len,-1),label_mask.view(bsize*n_classes,label_len)).view(bsize,n_classes,-1)
 
-        l = torch.bmm(label_repre,mention_repre.view(bsize,self.hidden_dim,1)) # bsize * N_CLASSES * 1
+        # single_label_repre = self.label_embedding(torch.tensor([[i for i in range(n_classes)] * bsize]).to(device)).view(bsize,n_classes,-1)
 
-        return self.classifier(l).squeeze()
+        score = torch.bmm(label_repre,mention_repre.view(bsize,self.label_word_dim,1)) # bsize * N_CLASSES * 1
+
+        return score.squeeze()
 
 
     def train_epoch(self,train_iter):
@@ -241,11 +298,11 @@ class Model(nn.Module):
         loss = 0.0
         cur_batch = 1
         for batch in train_iter:
-            mention = torch.tensor(batch['mention']).to(device)
-            left_context = torch.tensor(batch['left_context']).to(device)
-            right_context = torch.tensor(batch['right_context']).to(device)
-            candidate_labels = torch.tensor(batch['full_labels']).to(device)
-            labels = torch.tensor(batch['labels']).to(device)
+            mention = torch.from_numpy(batch['mention']).to(device)
+            left_context = torch.from_numpy(batch['left_context']).to(device)
+            right_context = torch.from_numpy(batch['right_context']).to(device)
+            candidate_labels = torch.from_numpy(batch['full_labels']).to(device)
+            labels = torch.from_numpy(batch['labels']).to(device)
 
             output = self.forward(mention,left_context,right_context,candidate_labels)# bsize * N_CLASSES
             batch_loss = self.loss_fn(output,labels.float())
@@ -294,7 +351,7 @@ class Vocab(object):
             else:
                 getattr(self,name)[d] = len(getattr(self,name))
 
-def build_vocab(filenames):
+def build_vocab(filenames,args):
 
     vocab = Vocab()
     vocab.stoi = {'<pad>':0,'<unk>':1}
@@ -304,66 +361,130 @@ def build_vocab(filenames):
     for filepath in filenames:
         with open(filepath,'r') as f:
             for line in f:
-                mention,labels,left_context,right_context= line.rstrip().split('\t')
+                mention,labels,left_context,right_context,_= line.rstrip().split('\t')
                 vocab.renew_vocab(mention.split(),'stoi')
                 vocab.renew_vocab(left_context.split(),'stoi')
                 vocab.renew_vocab(right_context.split(),'stoi')
                 for label in labels.split():
-                    vocab.renew_vocab(label.replace('/',' ').split(),'lwtoi')
+                    if not args.share_vocab:
+                        vocab.renew_vocab(label.replace('/',' ').replace('_',' ').split(),'lwtoi')
+                    else:
+                        vocab.renew_vocab(label.replace('/',' ').replace('_',' ').split(),'stoi')
                 vocab.renew_vocab(labels.split(),'ltoi')
 
     return vocab
 
+def generate_dataset(args):
+
+    filepaths = ['train.tsv', 'dev.tsv', 'test.tsv']
+    for i in range(len(filepaths)):
+        filepaths[i] = os.path.join(args.data_dir, filepaths[i])
+
+    vocab = build_vocab(filepaths, args)
+    torch.save(vocab, args.vocab_pth)
+
+    print('Saved vocab')
+
+    train_dataset = EntityTypingDataset(filepaths[0],vocab,args.batch_size,args.share_vocab)
+    dev_dataset = EntityTypingDataset(filepaths[1],vocab,args.batch_size,args.share_vocab)
+    test_dataset = EntityTypingDataset(filepaths[2], vocab, args.batch_size, args.share_vocab)
+    print('\n Saving datasets.')
+    torch.save(train_dataset, args.train_dataset_pth, pickle_module=dill)
+    torch.save(dev_dataset,args.dev_dataset_pth,pickle_module=dill)
+    torch.save(test_dataset, args.test_dataset_pth, pickle_module=dill)
+
+
+def generate_embedding(args):
+    vocab = torch.load(args.vocab_pth)
+    if args.word_pretrained_path is not None:
+        if args.glove_pth is not None:
+            args.word_pretrained = load_pretrained(args.glove_pth, vocab.stoi, dim=args.word_dim, device=device,
+                                                   pad_idx=args.padding_idx)
+            torch.save(args.word_pretrained, args.word_pretrained_path)
+        else:
+            args.word_pretrained = torch.load(args.word_pretrained_path)
+
+    if args.label_word_pretrained_path is not None and not args.share_vocab:
+        if args.glove_pth is not None:
+            args.label_word_pretrained = load_pretrained(args.glove_pth, vocab.lwtoi, dim=args.label_word_dim,
+                                                         device=device, pad_idx=args.padding_idx)
+            torch.save(args.label_word_pretrained, args.label_word_pretrained_path)
+        else:
+            args.label_word_pretrained = torch.load(args.label_word_pretrained_path)
+
+
+def generate_folds(labelset,K=10):
+    length = len(labelset)
+    len_of_each_folds = length // K
+    label_list = list(labelset)
+    folds = []
+    for i in range(0,length,len_of_each_folds):
+        folds.append(label_list[i:min(i+len_of_each_folds,length)])
+    return folds
+
+
 def main(args):
-
-    # filepaths = ['train.tsv','test.tsv','test.tsv']
-    # for i in range(len(filepaths)):
-    #     filepaths[i] = os.path.join(args.data_dir,filepaths[i])
-    #
-    # vocab = build_vocab(filepaths)
-    # torch.save(vocab,'./data/FIGER/vocab.pkl')
-    # vocab = torch.load('./data/FIGER/vocab.pkl',pickle_module=dill)
-    # print('Vocab Loaded!')
-
-    # train_dataset = EntityTypingDataset(filepaths[0],vocab,args.batch_size)
-    # train_dataset = torch.load('train.dataset',pickle_module=dill)
-    # dev_dataset = EntityTypingDataset(filepaths[1],vocab,args.batch_size)
-
-
-    # for file in os.listdir(os.path.join(args.data_dir)):
-    #     if file.startswith('train.split.'):
-    #         train_parts = EntityTypingDataset(os.path.join(args.data_dir,file),vocab,args.batch_size)
-    #         print('\n')
-    #         torch.save(train_parts,os.path.join('/home/user_data55/lijh/data/FIGER',file+'.pkl'),pickle_module=dill)
-    #         print(file)
-    #
-    # print('Write train file splits.')
-    #test_dataset = EntityTypingDataset(filepaths[2],vocab,args.batch_size)
-
-    # torch.save(train_dataset,'/home/user_data55/lijh/FIGER/train.pickle',pickle_module=dill)
-    # torch.save(test_dataset,'/home/user_data55/lijh/FIGER/test.pickle',pickle_module=dill)
-
-    # train_parts = []
-    # for file in os.listdir(args.data_dir):
-    #     if 'train' in file and 'pkl' in file:
-    #         train_parts.append(torch.load(os.path.join(args.data_dir,file),pickle_module=dill))
-    # train_dataset = torch.utils.data.ConcatDataset(train_parts)
-    # torch.save(train_dataset,'./data/FIGER/train.pkl',pickle_module=dill)
-    # torch.save(test_dataset,'./data/FIGER/test.pkl',pickle_module=dill)
-
     import time
     start_time = time.time()
-    vocab = torch.load('./data/FIGER/vocab.pkl',pickle_module=dill)
-    train_dataset = torch.load('./data/FIGER/train.pkl',pickle_module=dill)
-    dev_dataset = torch.load('./data/FIGER/test.pkl',pickle_module=dill)
-    test_dataset = torch.load('./data/FIGER/test.pkl',pickle_module=dill)
+    vocab = torch.load(args.vocab_pth,pickle_module=dill)
+    # train_dataset = torch.load(args.train_dataset_pth,pickle_module=dill)
+    # dev_dataset = torch.load(args.dev_dataset_pth,pickle_module=dill)
+    # test_dataset = torch.load(args.test_dataset_pth,pickle_module=dill)
+    filepaths = ['train.tsv', 'dev.tsv', 'test.tsv']
+    for i in range(len(filepaths)):
+        filepaths[i] = os.path.join(args.data_dir, filepaths[i])
+    train_dataset = EntityTypingDataset(filepaths[0],vocab,args.batch_size,args.share_vocab)
+    dev_dataset = EntityTypingDataset(filepaths[1],vocab,args.batch_size,args.share_vocab)
+    test_dataset = EntityTypingDataset(filepaths[2], vocab, args.batch_size, args.share_vocab)
     end_time = time.time()
-    print( 'Loaded dataset in {:.2f}s '.format(end_time-start_time))
+    print('Loaded dataset in {:.2f}s '.format(end_time-start_time))
+
+    if args.word_pretrained_path is not None:
+        args.word_pretrained = torch.load(args.word_pretrained_path)
+        print(' Pretrained word embedding loaded!')
+    else:
+        args.word_pretrained = None
+        print(' Using random initialized word embedding.')
+
+    if args.label_word_pretrained_path is not None and not args.share_vocab:
+        args.label_word_pretrained = torch.load(args.label_word_pretrained_path)
+        print(' Pretrained label word embedding loaded!')
+    else:
+        args.label_word_pretrained = None
+        print(' Using random initialized label word embedding.')
+
+    if args.mode == 'zero-shot':
+        train_labels = train_dataset.get_label_set()
+        test_labels = test_dataset.get_label_set()
+        folds = generate_folds(test_labels)
+
+        for i,fold in enumerate(folds):
+            print('Training Folds: {}'.format(i))
+            train_subset = train_dataset.get_subset(fold,mode='unseen')
+            dev_subset = dev_dataset.get_subset(fold,mode='unseen')
+            test_subset = test_dataset.get_subset(fold,mode='seen')
+
+            with open('fold/fold{}.txt'.format(str(i)),'w') as f:
+                f.write('Training Subset labels: {}'.format(' '.join(list(train_labels - set(fold)))) + '\n')
+                f.write('Test Subset labels: {}'.format(' '.join(fold)))
+
+            # print('Total Training Instances :{}'.format(len(train_subset)))
+            # print('Total Training labels :{}'.format(len(train_subset.get_label_set())))
+            # print('Total Test Instances: {}'.format(len(test_subset)))
+
+            test_acc = train(args,train_subset,dev_subset,test_subset,vocab)
+            with open('fold/fold{}.txt'.format(str(i)),'a') as f:
+                f.write('Test Acc :({:.2f},{:.2f},{:.2f}'.format(test_acc[0],test_acc[1],test_acc[2]))
+
+    elif args.mode == 'supervised':
+        train(args,train_dataset,dev_dataset,test_dataset,vocab)
 
 
-    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=True,num_workers=4,collate_fn=collate_fn)
-    dev_iter = DataLoader(dataset=dev_dataset,batch_size=args.batch_size,shuffle=False,num_workers=4,collate_fn=collate_fn)
-    test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=False,num_workers=4,collate_fn=collate_fn)
+def train(args,train_dataset,dev_dataset,test_dataset,vocab):
+
+    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=False,num_workers=8,collate_fn=collate_fn)
+    dev_iter = DataLoader(dataset=dev_dataset,batch_size=args.batch_size,shuffle=False,num_workers=8,collate_fn=collate_fn)
+    test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=False,num_workers=8,collate_fn=collate_fn)
 
     args.n_words = len(vocab.stoi)
     args.n_labels = len(vocab.ltoi)
@@ -371,40 +492,25 @@ def main(args):
 
     args.padding_idx = 0
 
-    if args.word_pretrained_path is not None:
-        if args.glove_pth is not None:
-            args.word_pretrained = load_pretrained(args.glove_pth,vocab.stoi,dim=args.word_dim,device=device,pad_idx=args.padding_idx)
-            torch.save(args.word_pretrained,args.word_pretrained_path)
-        else:
-            args.word_pretrained = torch.load(args.word_pretrained_path)
-
-        # args.word_pretrained = torch.load(args.word_pretrained_path,)
-    if args.label_word_pretrained_path is not None:
-        if args.glove_pth is not None:
-            args.label_word_pretrained = load_pretrained(args.glove_pth,vocab.lwtoi,dim=args.label_word_dim,device=device,pad_idx=args.padding_idx)
-            torch.save(args.label_word_pretrained,args.label_word_pretrained_path)
-        else:
-            args.label_word_pretrained = torch.load(args.label_word_pretrained_path)
-
     model = Model(args).to(device)
 
     best_acc = -1.
     for epoch in range(args.epoch):
         model.train_epoch(train_iter)
-        # train_acc = model.evaluate(train_iter)
         dev_acc = model.evaluate(dev_iter)
 
         print(' \nEpoch {}, Dev Acc : ({:.2f},{:.2f},{:.2f})'.format(epoch,dev_acc[0],dev_acc[1],dev_acc[2]))
         if dev_acc[0] > best_acc:
             best_acc = dev_acc[0]
-            torch.save(model.state_dict(),'model.pth')
+            torch.save(model.state_dict(),args.save_pth)
 
     model = Model(args).to(device)
-    model.load_state_dict(torch.load('model.pth'))
+    model.load_state_dict(torch.load(args.save_pth))
 
     dev_acc = model.evaluate(dev_iter)
     test_acc = model.evaluate(test_iter)
     print('Dev Acc: ({:.2f},{:.2f},{:.2f}), Test Acc :({:.2f},{:.2f},{:.2f})'.format(dev_acc[0],dev_acc[1],dev_acc[2],test_acc[0],test_acc[1],test_acc[2]))
+    return test_acc
 
 class TestConfig:
 
@@ -415,40 +521,69 @@ class TestConfig:
         args.label_dim = 10
         args.label_word_dim = 30
         args.batch_size = 10
+        args.share_vocab =True
         args.epoch = 20
         args.use_position_embedding = False
-        args.data_dir = '../../data/FIGER'
+        args.data_dir = '../../data/FIGER-gold'
         # args.pretrained_path = '/home/user_data/lijh/data/english_embeddings/glove.840B.300d.txt'
         args.word_pretrained_path = None
         args.label_word_pretrained_path = None
+        args.word_pretrained = None
+        args.label_word_pretrained = None
 
+        args.padding_idx = 0
         args.lr = 1e-3
-        args.pretrained = None
+
+        args.vocab_pth = './data/FIGER/share_vocab/vocab.pkl'
+        args.train_dataset_pth = './data/FIGER/share_vocab/train.pkl'
+        args.dev_dataset_pth = './data/FIGER/share_vocab/dev.pkl'
+        args.test_dataset_pth = './data/FIGER/share_vocab/test.pkl'
 
 class DefaultConfig:
 
     def __init__(args):
         args.word_dim = 300
-        args.hidden_dim = 300
-        args.attention_dim = 100
+        args.hidden_dim = 100
+        args.attention_dim = 50
         args.label_dim = 300
         args.label_word_dim = 300
         args.batch_size = 1024
-        args.epoch = 5
+        args.epoch = 10
         args.use_position_embedding = False
+        args.share_vocab = True
         args.data_dir = '/home/user_data55/lijh/data/FIGER'
-        # args.glove_pth = '/home/user_data/lijh/data/english_embeddings/glove.840B.300d.txt'
-        args.glove_pth = None
-        args.word_pretrained_path = './data/FIGER/word_pretrained.pth'
-        # args.word_pretrained_path = None
-        args.label_word_pretrained_path = './data/FIGER/label_pretrained.pth'
-        # args.label_word_pretrained_path = None
+
+        args.word_pretrained_path = './data/FIGER/share_vocab/word_pretrained.pth'
+        args.label_word_pretrained_path = './data/FIGER/share_vocab/label_pretrained.pth'
         args.lr = 1e-3
+        args.padding_idx = 0
+
+        args.vocab_pth = './data/FIGER/share_vocab/vocab.pkl'
+        args.train_dataset_pth = './data/FIGER/share_vocab/train.pkl'
+        args.dev_dataset_pth = './data/FIGER/share_vocab/dev.pkl'
+        args.test_dataset_pth = './data/FIGER/share_vocab/test.pkl'
+
+        args.save_pth = 'zero_shot.pth'
+
+        args.freeze = True
 
 if __name__ == '__main__':
     import sys
     if sys.argv[1] == '--test':
         args = TestConfig()
-    elif sys.argv[1] == '--train':
-        args= DefaultConfig()
-    main(args)
+        args.glove_pth = None
+        args.mode = 'supervised'
+        main(args)
+    elif sys.argv[1] == '--supervised':
+        args = DefaultConfig()
+        args.mode = 'supervised'
+        main(args)
+    elif sys.argv[1] == '--zero-shot':
+        args = DefaultConfig()
+        args.mode = 'zero-shot'
+        main(args)
+    elif sys.argv[1] == '--generate':
+        args = DefaultConfig()
+        args.glove_pth = '/home/user_data/lijh/data/english_embeddings/glove.840B.300d.txt'
+        generate_dataset(args)
+        generate_embedding(args)
