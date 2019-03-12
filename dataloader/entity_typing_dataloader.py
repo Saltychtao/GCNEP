@@ -32,7 +32,7 @@ class EntityTypingDataset(Dataset):
 
         self.full_label_set = list(
             map(lambda x: x.replace('/', ' ').replace('_',' ').split(), list(sorted(vocab.ltoi, key=vocab.ltoi.get))))
-        self.label_dict = defaultdict(lambda : [])
+        self.label_dict = defaultdict(lambda: [])
         self.label_set = set()
         self.length = 0
         cnt = 0
@@ -69,6 +69,7 @@ class EntityTypingDataset(Dataset):
     def get_label_set(self):
         return self.label_set
 
+    # FIX: remove the instances that contains the labels
     def get_subset(self,labels,mode):
         idxs = []
         if mode == 'seen':
@@ -76,9 +77,10 @@ class EntityTypingDataset(Dataset):
                 idxs.extend(self.label_dict[label])
 
         elif mode == 'unseen':
-            for key,val in self.label_dict.items():
-                if key not in labels:
-                    idxs.extend(val)
+            excluded = []
+            for label in labels:
+                excluded.extend(self.label_dict[label])
+            idxs = set([i for i in range(self.__len__())]) - set(excluded)
         return torch.utils.data.Subset(self,list(set(idxs)))
 
     def __len__(self):
