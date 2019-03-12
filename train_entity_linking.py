@@ -1,10 +1,10 @@
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 from dataloader.entity_typing_dataloader import EntityTypingDataset
 from learner.entity_typing import Model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def generate_folds(labelset,K=10):
     length = len(labelset)
@@ -52,7 +52,7 @@ def main(args):
 
             with open('fold/fold{}.txt'.format(str(i)),'w') as f:
                 f.write('Training Subset labels: {}'.format(' '.join(list(train_labels - set(fold)))) + '\n')
-                f.write('Test Subset labels: {}'.format(' '.join(fold)))
+                f.write('Test Subset labels: {}\n'.format(' '.join(fold)))
 
             # print('Total Training Instances :{}'.format(len(train_subset)))
             # print('Total Training labels :{}'.format(len(train_subset.get_label_set())))
@@ -97,6 +97,7 @@ def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
     test_acc = model.evaluate(test_iter)
     print('Dev Acc: ({:.2f},{:.2f},{:.2f}), Test Acc :({:.2f},{:.2f},{:.2f})'.format(dev_acc[0],dev_acc[1],dev_acc[2],test_acc[0],test_acc[1],test_acc[2]))
     return test_acc
+
 
 class TestConfig:
 
@@ -149,7 +150,7 @@ class DefaultConfig:
         args.dev_dataset_pth = './data/FIGER/share_vocab/dev.pkl'
         args.test_dataset_pth = './data/FIGER/share_vocab/test.pkl'
 
-        args.save_pth = 'zero_shot.pth'
+        args.save_pth = 'saved_models/zero_shot.pth'
 
         args.freeze = True
 
