@@ -36,3 +36,31 @@ class LSTMEncoder(nn.Module):
             _,unperm_idx = perm_idx.sort(0)
             outputs = outputs[unperm_idx]
         return outputs,ht.permute(1,0,2).contiguous().view(bsize,-1)
+
+
+def mean_pool(input,length):
+    # input: bsize *  seq_len * dim
+    # length: bsize
+    length = length.unsqueeze(1)
+    input = torch.sum(input,1).squeeze()
+    return torch.div(input,length.float())
+
+
+def max_pool(input):
+    input[input == 0] = -1e9
+    return torch.max(input,dim=1)[0]
+
+
+class GateNetwork(nn.Module):
+    def __init__(self,hidden_dim):
+        super(GateNetwork, self).__init__()
+        self.gate_fc1 = nn.Linear(hidden_dim,hidden_dim)
+        self.gate_fc2 = nn.Linear(hidden_dim,hidden_dim)
+
+    def forward(self,input1,input2):
+        assert input1.size() == input2.size()
+        gate = torch.sigmoid(
+            self.gate_fc1(input1) +
+            self.gate_fc2(input2)
+        )
+        return torch.mul(gate,input2)
