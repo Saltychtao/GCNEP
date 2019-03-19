@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 
 from utils.module import LSTMEncoder,mean_pool,max_pool,GateNetwork
-# from propagator.GCN import RGCN
+from propagator.GCN import RGCN
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -24,10 +24,19 @@ class SimpleQA(nn.Module):
         else:
             self.word_embedding = nn.Embedding.from_pretrained(args.word_pretrained,freeze=args.freeze)
 
-        self.relation_embedding = nn.Embedding(args.n_relations,args.relation_dim)
+        # self.relation_embedding = nn.Embedding(args.n_relations,args.relation_dim)
 
-        # self.rgcn = RGCN(args.relation_dim,args.hidden_dim,args.n_relations*2,args.num_bases,
-        #                  args.num_hidden_layers,args.rgcn_dropout,use_cuda=True)
+        self.rgcn = RGCN(
+            args.n_entities,
+            args.relation_dim,
+            args.relation_dim,
+            2*args.n_relations,
+            args.num_bases,
+            args.num_hidden_layers,
+            args.rgcn_dropout,
+            use_cuda=True
+        )
+
 
         self.word_encoder = LSTMEncoder(
             input_size=args.word_dim,
@@ -61,11 +70,13 @@ class SimpleQA(nn.Module):
         self.args = args
         self.dropout = nn.Dropout(p=0.5)
 
+        print(self)
+
 
     def reset_parameters(self):
         torch.nn.init.xavier_uniform_(self.relation_embedding.weight)
 
-    def forward(self,question,relation):
+    def forward(self,question,relation,g):
 
         n_rels = relation.size()[1]
         question_length = (question != self.args.padding_idx).sum(dim=1).long().to(device)
@@ -78,14 +89,17 @@ class SimpleQA(nn.Module):
         all_relations = torch.tensor([i for i in range(self.n_relations)]).to(device)
         all_relation_words = torch.tensor(self.all_relation_words).to(device)  # n_relations * max_len
 
-        # self.rgcn.forward(self.g)
-        # single_relation_repre = self.rgcn.relation_embedding(all_relations)
-        single_relation_repre = self.relation_embedding(all_relations)
+        self.rgcn.forward(g)
+        single_relation_repre = self.rgcn.relation_embedding(all_relations)
+
+        # single_relation_repre = self.relation_embedding(all_relations)
 
         relation_words_lengths = (all_relation_words != self.args.padding_idx).sum(dim=-1).long().to(device)
         relation_words_repre = self.word_embedding(all_relation_words)
         relation_words_repre = self.dropout(relation_words_repre)
         relation_words_repre = mean_pool(self.word_encoder(relation_words_repre,relation_words_lengths,need_sort=True)[0],relation_words_lengths)
+
+
 
         relation_repre = self.gate(single_relation_repre,relation_words_repre)
 
@@ -107,9 +121,15 @@ class SimpleQA(nn.Module):
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
             labels = torch.tensor(batch['labels']).to(device)
+            node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
+            rel = torch.from_numpy(batch['rel']).view(-1).to(device)
+            norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
+            g = batch['g']
+            g.ndata.update({'id':node_id,'norm':norm})
+            g.edata['type'] = rel
             bsize = question.size()[0]
 
-            scores = self.forward(question,relation)  # bsize * (1 + ns)
+            scores = self.forward(question,relation,g)  # bsize * (1 + ns)
             batch_loss = self.loss_fn(scores,labels)
             self.optimizer.zero_grad()
             batch_loss.backward()
@@ -130,9 +150,15 @@ class SimpleQA(nn.Module):
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
             labels = torch.tensor(batch['labels']).to(device)
+            node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
+            rel = torch.from_numpy(batch['rel']).view(-1).to(device)
+            norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
+            g = batch['g']
+            g.ndata.update({'id':node_id,'norm':norm})
+            g.edata['type'] = rel
             bsize = question.size()[0]
 
-            scores = self.forward(question,relation) # bsize * (1 + neg_num)
+            scores = self.forward(question,relation,g) # bsize * (1 + neg_num)
             correct += (scores.argmax(dim=1) == labels).sum().item()
             total += bsize
 
