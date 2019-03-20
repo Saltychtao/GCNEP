@@ -24,10 +24,7 @@ class SimpleQA(nn.Module):
         else:
             self.word_embedding = nn.Embedding.from_pretrained(args.word_pretrained,freeze=args.freeze)
 
-        self.relation_embedding = nn.Embedding(args.n_relations,args.relation_dim)
-
-        # self.rgcn = RGCN(args.relation_dim,args.hidden_dim,args.n_relations*2,args.num_bases,
-        #                  args.num_hidden_layers,args.rgcn_dropout,use_cuda=True)
+        self.relation_embedding = nn.Embedding(args.n_relations,args.relation_dim,args.padding_idx)
 
         self.word_encoder = LSTMEncoder(
             input_size=args.word_dim,
@@ -56,11 +53,11 @@ class SimpleQA(nn.Module):
         self.score_function = nn.CosineSimilarity(dim=2)
 
         self.all_relation_words = args.all_relation_words
+        self.all_relation_names = args.all_relation_names
 
-        self.n_relations= args.n_relations
+        self.n_relations = args.n_relations
         self.args = args
         self.dropout = nn.Dropout(p=0.5)
-
 
     def reset_parameters(self):
         torch.nn.init.xavier_uniform_(self.relation_embedding.weight)
@@ -70,24 +67,30 @@ class SimpleQA(nn.Module):
         n_rels = relation.size()[1]
         question_length = (question != self.args.padding_idx).sum(dim=1).long().to(device)
         question = self.word_embedding(question)
-        question = self.dropout(question)
+        # question = self.dropout(question)
         low_question_repre = self.word_encoder(question,question_length,need_sort=True)[0]
-        high_question_repre = self.question_encoder(low_question_repre,question_length,need_sort=True)[0]
-        question_repre = max_pool(low_question_repre + high_question_repre)  # bsize * hidden
 
-        all_relations = torch.tensor([i for i in range(self.n_relations)]).to(device)
+        high_question_repre = self.question_encoder(low_question_repre,question_length,need_sort=True)[0]
+        question_repre = (low_question_repre + high_question_repre).mean(1)  # bsize * hidden
+
+        # all_relations = torch.tensor([i for i in range(self.n_relations)]).to(device)
         all_relation_words = torch.tensor(self.all_relation_words).to(device)  # n_relations * max_len
 
-        # self.rgcn.forward(self.g)
-        # single_relation_repre = self.rgcn.relation_embedding(all_relations)
-        single_relation_repre = self.relation_embedding(all_relations)
+        # single_relation_repre = self.relation_embedding(all_relations)
+        all_relation_names = torch.tensor(self.all_relation_names).to(device)
+        relation_names_lengths = (all_relation_names != self.args.padding_idx).sum(dim=-1).long().to(device)
+        
+        all_relation_names = self.word_embedding(all_relation_names)
+        
+        relation_names_repre = self.word_encoder(all_relation_names,relation_names_lengths,need_sort=True)[0]
 
         relation_words_lengths = (all_relation_words != self.args.padding_idx).sum(dim=-1).long().to(device)
         relation_words_repre = self.word_embedding(all_relation_words)
         relation_words_repre = self.dropout(relation_words_repre)
-        relation_words_repre = mean_pool(self.word_encoder(relation_words_repre,relation_words_lengths,need_sort=True)[0],relation_words_lengths)
+        relation_words_repre = self.word_encoder(relation_words_repre,relation_words_lengths,need_sort=True)[0]
+        relation_repre = torch.cat([relation_names_repre,relation_words_repre],dim=1).mean(1)
 
-        relation_repre = self.gate(single_relation_repre,relation_words_repre)
+        # relation_repre = self.gate(relation_names_repre,relation_words_repre)
 
         relation_repre = relation_repre[relation,:]  # bsize * n_rels * hidden
 
@@ -132,8 +135,9 @@ class SimpleQA(nn.Module):
             labels = torch.tensor(batch['labels']).to(device)
             bsize = question.size()[0]
 
+            relation_mask = (2*(relation != 0) -1).float() # 1 -> 1, 0 -> -1
             scores = self.forward(question,relation) # bsize * (1 + neg_num)
-            correct += (scores.argmax(dim=1) == labels).sum().item()
+            correct += ((scores*relation_mask).argmax(dim=1) == labels).sum().item()
             total += bsize
 
         return correct / total

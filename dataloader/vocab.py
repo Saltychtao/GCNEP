@@ -16,7 +16,12 @@ class SimpleQAVocab(Vocab):
 
     def __init__(self):
         self.relIdx2wordIdx = {}
+        self.relIdx2nameIdx = {}
 
     def get_all_relation_words(self):
         n_relations = len(self.rtoi)
         return np.array(pad([self.relIdx2wordIdx[i] for i in range(n_relations)],0,max_len=20))
+
+    def get_all_relation_names(self):
+        n_relations = len(self.rtoi)
+        return np.array(pad([self.relIdx2nameIdx[i] for i in range(n_relations)],0,max_len=10))

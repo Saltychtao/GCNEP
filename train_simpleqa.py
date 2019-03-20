@@ -21,7 +21,6 @@ def main(args):
     import time
     start_time = time.time()
     vocab = SimpleQADataset.load_vocab(args)
-    args.kb_triplets = torch.load(args.kb_triplets_pth)
     train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(args)
     end_time = time.time()
     print('Loaded dataset in {:.2f}s'.format(end_time - start_time))
@@ -29,7 +28,7 @@ def main(args):
     args.n_words = len(vocab.stoi)
     args.n_relations = len(vocab.rtoi)
     args.all_relation_words = vocab.get_all_relation_words()
-    args.n_entities = len(vocab.etoi)
+    args.all_relation_names = vocab.get_all_relation_names()
 
     if args.word_pretrained_pth is not None:
         args.word_pretrained = torch.load(args.word_pretrained_pth)
@@ -113,7 +112,7 @@ class DefaultConfig:
         self.relation_dim = 300
         self.batch_size = 64
         self.epoch = 100
-        self.data_dir = 'data/SimpleQA'
+        self.data_dir = 'data/SimpleQuestions_yu'
         self.lr = 1e-3
         self.margin = 0.1
         self.ns = 256
@@ -127,7 +126,7 @@ class DefaultConfig:
         self.pad_token = '<pad>'
         self.unk_idx = 1
         self.unk_token = '<unk>'
-        self.relation_file = 'data/SimpleQA/FB2M.rel_voc.pickle'
+        self.relation_file = 'data/SimpleQuestions_yu/relation.2M.list'
         self.vocab_pth = 'data/SimpleQuestions_yu/vocab.pth'
 
         self.train_dataset_pth = './data/SimpleQuestions_yu/train.pkl'
@@ -135,7 +134,7 @@ class DefaultConfig:
         self.test_dataset_pth = './data/SimpleQuestions_yu/test.pkl'
         self.graph_file = './data/SimpleQuestions_yu/FB2M_subgraph.txt'
 
-        self.save_pth = 'results/simpleQA/model-layer_4-dropout_0.0.pth'
+        self.save_pth = 'results/simpleQA/baseline.pth'
 
         self.word_pretrained_pth = './data/SimpleQuestions_yu/word_pretrained.pth'
         # self.word_pretrained_pth = None
@@ -172,8 +171,9 @@ class TestConfig:
 
 if __name__ == '__main__':
     import sys
-    if sys.argv[1] == '--train':
+    if sys.argv[1] == '--supervised':
         args = DefaultConfig()
+        args.mode = 'supervised'
         main(args)
     elif sys.argv[1] == '--test':
         args = TestConfig()
@@ -181,5 +181,5 @@ if __name__ == '__main__':
     elif sys.argv[1] == '--generate':
         args = DefaultConfig()
         SimpleQADataset.generate_dataset(args)
-        # SimpleQADataset.generate_embedding(args,device)
-        SimpleQADataset.generate_graph(args,device)
+        SimpleQADataset.generate_embedding(args,device)
+        # SimpleQADataset.generate_graph(args,device)
