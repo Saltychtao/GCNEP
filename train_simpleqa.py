@@ -6,6 +6,16 @@ from learner.SimpleQA import SimpleQA
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+def generate_folds(labelset,K=10):
+    length = len(labelset)
+    len_of_each_folds = length // K
+    label_list = list(labelset)
+    folds = []
+    for i in range(0,length,len_of_each_folds):
+        folds.append(label_list[i:min(i + len_of_each_folds,length)])
+    return folds
+
+
 def main(args):
 
     import time
@@ -35,7 +45,26 @@ def main(args):
         args.relation_pretrained = None
         print(' Using random initialized label word embedding.')
 
-    train(args,train_dataset,dev_dataset,test_dataset,vocab,SimpleQADataset.collate_fn)
+    if args.mode == 'supervised':
+        train(args,train_dataset,dev_dataset,test_dataset,vocab,SimpleQADataset.collate_fn)
+    elif args.mode == 'zero-shot':
+        train_rels = train_dataset.get_label_set()
+        test_rels = test_dataset.get_label_set()
+        folds = generate_folds(test_rels)
+
+        for i,fold in enumerate(folds):
+            print('Training Folds :{}'.format(i))
+            train_subset = train_dataset.get_subset(fold,mode='unseen')
+            dev_subset = dev_dataset.get_subset(fold,mode='unseen')
+            test_subset = test_dataset.get_subset(fold,mode='seen')
+
+            with open('fold/fold{}.txt'.format(str(i)),'w') as f:
+                f.write('Training Subset labels: {}'.format(','.join(list(train_rels - set(fold)))) + '\n')
+                f.write('Test Subset labels: {}\n'.format(','.join(fold)))
+
+            test_acc = train(args,train_subset,dev_subset,test_subset,vocab,SimpleQADataset.collate_fn)
+            with open('fold/fold{}.txt'.format(str(i)),'a') as f:
+                f.write('Test Acc : {:.2f}'.format(test_acc))
 
 
 def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
@@ -99,19 +128,18 @@ class DefaultConfig:
         self.unk_idx = 1
         self.unk_token = '<unk>'
         self.relation_file = 'data/SimpleQA/FB2M.rel_voc.pickle'
-        self.vocab_pth = 'data/SimpleQA/vocab.pth'
+        self.vocab_pth = 'data/SimpleQuestions_yu/vocab.pth'
 
-        self.train_dataset_pth = './data/SimpleQA/train.pkl'
-        self.dev_dataset_pth = './data/SimpleQA/dev.pkl'
-        self.test_dataset_pth = './data/SimpleQA/test.pkl'
-        self.graph_file = './data/Freebase-2M/FB2M_subgraph.txt'
+        self.train_dataset_pth = './data/SimpleQuestions_yu/train.pkl'
+        self.dev_dataset_pth = './data/SimpleQuestions_yu/dev.pkl'
+        self.test_dataset_pth = './data/SimpleQuestions_yu/test.pkl'
+        self.graph_file = './data/SimpleQuestions_yu/FB2M_subgraph.txt'
 
-        self.save_pth = 'results/simpleQA/model_layer6.pth'
+        self.save_pth = 'results/simpleQA/model-layer_4-dropout_0.0.pth'
 
-        self.word_pretrained_pth = './data/SimpleQA/word_pretrained.pth'
+        self.word_pretrained_pth = './data/SimpleQuestions_yu/word_pretrained.pth'
         # self.word_pretrained_pth = None
-        self.graph_pth = './data/SimpleQA/subgraph.pth'
-        self.kb_triplets_pth = './data/SimpleQA/kb_triplets.pth'
+        self.kb_triplets_pth = './data/SimpleQuestions_yu/kb_triplets.pth'
         self.relation_pretrained_pth = None
 
         self.glove_pth = '/home/user_data/lijh/data/english_embeddings/glove.6B.300d.txt'

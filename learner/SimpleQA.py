@@ -99,8 +99,6 @@ class SimpleQA(nn.Module):
         relation_words_repre = self.dropout(relation_words_repre)
         relation_words_repre = mean_pool(self.word_encoder(relation_words_repre,relation_words_lengths,need_sort=True)[0],relation_words_lengths)
 
-
-
         relation_repre = self.gate(single_relation_repre,relation_words_repre)
 
         relation_repre = relation_repre[relation,:]  # bsize * n_rels * hidden
@@ -121,12 +119,12 @@ class SimpleQA(nn.Module):
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
             labels = torch.tensor(batch['labels']).to(device)
-            node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
-            rel = torch.from_numpy(batch['rel']).view(-1).to(device)
-            norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
+            # node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
+            # rel = torch.from_numpy(batch['rel']).view(-1).to(device)
+            # norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
             g = batch['g']
-            g.ndata.update({'id':node_id,'norm':norm})
-            g.edata['type'] = rel
+            # g.ndata.update({'id':node_id,'norm':norm})
+            # g.edata['type'] = rel
             bsize = question.size()[0]
 
             scores = self.forward(question,relation,g)  # bsize * (1 + ns)

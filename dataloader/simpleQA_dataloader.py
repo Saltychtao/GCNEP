@@ -62,6 +62,19 @@ class SimpleQADataset(Dataset):
     def __len__(self):
         return self.length
 
+    def get_subset(self,labels,mode):
+        idxs = []
+        if mode == 'seen':
+            for label in labels:
+                idxs.extend(self.label_dict[label])
+
+        elif mode == 'unseen':
+            excluded = []
+            for label in labels:
+                excluded.extend(self.label_dict[label])
+            idxs = set([i for i in range(self.__len__())]) - set(excluded)
+        return torch.utils.data.Subset(self,list(set(idxs)))
+
     def __getitem__(self,item):
         line = linecache.getline(self.filename,item + 1)
         instance = self.process_line(line)
@@ -206,7 +219,14 @@ class SimpleQADataset(Dataset):
         num_rels = len(rel_set)
         g,rel,norm = build_graph_from_triplets(num_nodes=len(uniq_v),num_rels=num_rels,triplets=(src,rel,dst))
         # deg = g.in_degrees(range(g.number_of_nodes())).float().view(-1,1).to(device)
-
+        question = torch.tensor(question).to(device)
+        relation = torch.tensor(relation).to(device)
+        labels = torch.tensor(labels).to(device)
+        node_id = torch.from_numpy(uniq_v).view(-1,1).to(device)
+        rel = torch.from_numpy(rel).view(-1).to(device)
+        norm = torch.from_numpy(norm).view(-1,1).to(device)
+        g.ndata.update({'id':node_id,'norm':norm})
+        g.edata['type'] = rel
         return {
             'question':question,
             'relation':np.array(relation),
