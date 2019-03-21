@@ -68,7 +68,7 @@ class SimpleQA(nn.Module):
         n_rels = relation.size()[1]
         question_length = (question != self.args.padding_idx).sum(dim=1).long().to(device)
         question = self.word_embedding(question)
-        # question = self.dropout(question)
+        question = self.dropout(question)
         low_question_repre = self.word_encoder(question,question_length,need_sort=True)[0]
 
         high_question_repre = self.question_encoder(low_question_repre,question_length,need_sort=True)[0]
@@ -105,12 +105,12 @@ class SimpleQA(nn.Module):
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
             labels = torch.tensor(batch['labels']).to(device)
-            # node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
-            # rel = torch.from_numpy(batch['rel']).view(-1).to(device)
-            # norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
+            node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
+            rel = torch.from_numpy(batch['rel']).view(-1).to(device)
+            norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
             g = batch['g']
-            # g.ndata.update({'id':node_id,'norm':norm})
-            # g.edata['type'] = rel
+            g.ndata.update({'id':node_id,'norm':norm})
+            g.edata['type'] = rel
             bsize = question.size()[0]
 
             scores = self.forward(question,relation,g)  # bsize * (1 + ns)
@@ -143,7 +143,7 @@ class SimpleQA(nn.Module):
             bsize = question.size()[0]
 
             relation_mask = (1e9*(relation != 0) -1e9).float() # 1 -> 1, 0 -> -1
-            scores = self.forward(question,relation) # bsize * (1 + neg_num)
+            scores = self.forward(question,relation,g) # bsize * (1 + neg_num)
             correct += ((scores+relation_mask).argmax(dim=1) == labels).sum().item()
             total += bsize
 

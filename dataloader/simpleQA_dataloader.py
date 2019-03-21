@@ -81,7 +81,7 @@ class SimpleQADataset(Dataset):
     def __getitem__(self,item):
         line = linecache.getline(self.filename,item + 1)
         instance = self.process_line(line)
-        pos = instance['relation'][0]
+        pos = instance['relations'][0]
         if self.ns > 0:
             while len(instance['relations']) - 1 < self.ns:
                 idx = random.randint(0,len(self.vocab.rtoi) - 1)
@@ -185,6 +185,7 @@ class SimpleQADataset(Dataset):
         for x in list_of_examples:
             kb_triplets_list.extend(x['kb_triplets'])
         kb_triplets_set = set(kb_triplets_list)
+        assert len(kb_triplets_set) > 0
         rel_set = set()
         src,rel,tgt = [],[],[]
         for (h,r,t) in kb_triplets_set:
@@ -199,14 +200,7 @@ class SimpleQADataset(Dataset):
         num_rels = len(rel_set)
         g,rel,norm = build_graph_from_triplets(num_nodes=len(uniq_v),num_rels=num_rels,triplets=(src,rel,dst))
         # deg = g.in_degrees(range(g.number_of_nodes())).float().view(-1,1).to(device)
-        question = torch.tensor(question).to(device)
-        relation = torch.tensor(relation).to(device)
-        labels = torch.tensor(labels).to(device)
-        node_id = torch.from_numpy(uniq_v).view(-1,1).to(device)
-        rel = torch.from_numpy(rel).view(-1).to(device)
-        norm = torch.from_numpy(norm).view(-1,1).to(device)
-        g.ndata.update({'id':node_id,'norm':norm})
-        g.edata['type'] = rel
+
         return {
             'question':question,
             'relation':np.array(relation),
@@ -220,7 +214,7 @@ class SimpleQADataset(Dataset):
     @staticmethod
     def load_dataset(args):
         vocab = torch.load(args.vocab_pth,pickle_module=dill)
-        filepaths = ['train.tsv','dev.tsv','test.tsv']
+        filepaths = ['dev.tsv','dev.tsv','test.tsv']
         for i in range(len(filepaths)):
             filepaths[i] = os.path.join(args.data_dir,filepaths[i])
 

@@ -69,7 +69,7 @@ def main(args):
 
 def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
 
-    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=True,num_workers=12,collate_fn=collate_fn)
+    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=False,num_workers=12,collate_fn=collate_fn)
     dev_iter = DataLoader(dataset=dev_dataset,batch_size=args.batch_size,shuffle=True,num_workers=12,collate_fn=collate_fn)
     test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=True,num_workers=12,collate_fn=collate_fn)
 
@@ -90,7 +90,7 @@ def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
         dev_acc = model.evaluate(dev_iter)
         patience -= 1
 
-        print(' \nEpoch {}, Dev Acc : {:.2f}, Test Acc:{:.2f}'.format(epoch,dev_acc*100,test_acc*100))
+        print(' \nEpoch {}, Patience : {}, Dev Acc : {:.2f}'.format(epoch,patience,dev_acc*100))
         if patience > 0 and dev_acc > best_acc:
             best_acc = dev_acc
             torch.save(model.state_dict(),args.save_pth)
@@ -113,7 +113,7 @@ class DefaultConfig:
         self.relation_dim = 300
         self.batch_size = 64
         self.epoch = 100
-        self.data_dir = 'data/SimpleQuestions_v2'
+        self.data_dir = 'data/SimpleQuestions'
         self.lr = 1e-3
         self.margin = 0.1
         self.ns = 256
@@ -129,17 +129,17 @@ class DefaultConfig:
         self.unk_idx = 1
         self.unk_token = '<unk>'
 
-        self.relation_file = 'data/SimpleQuestions_v2/relation.id'
-        self.vocab_pth = 'data/SimpleQuestions_v2/vocab.pth'
+        self.relation_file = 'data/SimpleQuestions/relation.id'
+        self.vocab_pth = 'data/SimpleQuestions/vocab.pth'
 
-        self.graph_file = './data/SimpleQuestions_yu/FB2M_subgraph.txt'
+        self.graph_file = './data/SimpleQuestions/FB2M_subgraph.txt'
 
-        self.save_pth = 'results/simpleQA/baseline.pth'
+        self.save_pth = 'results/simpleQA/gcn.pth'
 
-        self.word_pretrained_pth = './data/SimpleQuestions_v2/word_pretrained.pth'
+        self.word_pretrained_pth = './data/SimpleQuestions/word_pretrained.pth'
 
         # self.word_pretrained_pth = None
-        self.kb_triplets_pth = './data/SimpleQuestions_yu/kb_triplets.pth'
+        self.kb_triplets_pth = './data/SimpleQuestions/kb_triplets.pth'
         self.relation_pretrained_pth = None
 
         self.glove_pth = '/home/user_data/lijh/data/english_embeddings/glove.6B.300d.txt'
