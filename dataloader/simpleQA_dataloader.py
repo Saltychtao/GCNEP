@@ -134,30 +134,14 @@ class SimpleQADataset(Dataset):
         vocab = torch.load(args.vocab_pth)
         args.word_pretrained = load_pretrained(args.glove_pth,vocab.stoi,dim=args.word_dim,device=device,pad_idx=args.padding_idx)
         torch.save(args.word_pretrained,args.word_pretrained_pth)
-        # args.label_pretrained = load_pretrained(args.transE_pth,vocab.rtoi,dim=args.relation_dim,device=device)
-        # torch.save(args.label_pretrained,args.label_pretrained_pth)
 
     @staticmethod
     def generate_graph(args,device):
         vocab = torch.load(args.vocab_pth)
-        entity_freq = defaultdict(lambda : 0)
+
         vocab.etoi = {'<unk>':1}
         triplets = []
-        with open(args.graph_file,'r') as f:
-            cnt = 0
-            for line in f:
-                h,r,t = line.rstrip().split()
-                entity_freq[h] += 1
-                entity_freq[r] += 1
-                cnt += 1
-                if cnt % 1000 == 0:
-                    print('\r{}'.format(cnt),end='')
 
-        print()
-        for e in entity_freq:
-            if entity_freq[e] > 0:
-                vocab.renew_vocab([e],'etoi')
-        print('Total Entities : {}'.format(len(vocab.etoi)))
         print('Total Relations: {}'.format(len(vocab.rtoi)))
 
         rcount = defaultdict(lambda : 0)
@@ -166,7 +150,7 @@ class SimpleQADataset(Dataset):
             cnt = 0
             for line in f:
                 h,r,t = line.rstrip().split()
-                if h not in vocab.etoi or t not in vocab.etoi or rcount[r] > 300:
+                if rcount[r] > 300:
                     continue
                 triplets.append((h,r,t))
                 rcount[r] += 1
@@ -176,11 +160,12 @@ class SimpleQADataset(Dataset):
         vocab.etoi = {'<unk>':1}
         for h,r,t in triplets:
             vocab.renew_vocab([h,t],'etoi')
+        print('Total Entities : {}'.format(len(vocab.etoi)))
 
         numeralized_triplets = []
         for h,r,t in triplets:
             numeralized_triplets.append((vocab.etoi[h],vocab.rtoi[r],vocab.etoi[t]))
-            assert vocab.rtoi[r] < 6702
+
         print()
         print('Filtered Entities: {}'.format(len(vocab.etoi)))
         print('Filtered Triplets: {}'.format(len(numeralized_triplets)))

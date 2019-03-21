@@ -154,10 +154,10 @@ class RGCNTransLayer(RGCNLayer):
         super(RGCNTransLayer, self).__init__(in_feat,out_feat,bias,activation=None,self_loop=self_loop,dropout=dropout)
 
         self.num_rels = num_rels
-        self.rel_embedding = nn.Embedding(num_rels,rel_dim)
+        self.rel_embedding = nn.Embedding(num_rels,rel_dim,padding_idx=0)
 
     def msg_func(self,edges):
-        src = edges.src['h']            
+        src = edges.src['h']
         rel = self.rel_embedding(edges.data['type'])
         msg = src - rel
         return {'msg':msg}

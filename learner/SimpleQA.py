@@ -80,14 +80,11 @@ class SimpleQA(nn.Module):
         self.rgcn.forward(g)
         single_relation_repre = self.rgcn.relation_embedding(all_relations)
 
-        # single_relation_repre = self.relation_embedding(all_relations)
-
-
         relation_words_lengths = (all_relation_words != self.args.padding_idx).sum(dim=-1).long().to(device)
         relation_words_repre = self.word_embedding(all_relation_words)
         relation_words_repre = self.dropout(relation_words_repre)
         relation_words_repre = (self.word_encoder(relation_words_repre,relation_words_lengths,need_sort=True)[0]).mean(1)
-        # relation_repre = torch.cat([single_relation_repre,relation_words_repre],dim=1).mean(1)
+
         relation_repre = self.gate(single_relation_repre,relation_words_repre)
 
         relation_repre = relation_repre[relation,:]  # bsize * n_rels * hidden
