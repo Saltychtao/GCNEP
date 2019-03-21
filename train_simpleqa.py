@@ -113,11 +113,12 @@ class DefaultConfig:
         self.relation_dim = 300
         self.batch_size = 64
         self.epoch = 100
-        self.data_dir = 'data/SimpleQA'
+        self.data_dir = 'data/SimpleQuestions_v2'
         self.lr = 1e-3
         self.margin = 0.1
         self.ns = 256
         self.patience = 5
+
         self.freeze = True
         self.num_bases = 100
         self.num_hidden_layers = 4
@@ -127,17 +128,16 @@ class DefaultConfig:
         self.pad_token = '<pad>'
         self.unk_idx = 1
         self.unk_token = '<unk>'
-        self.relation_file = 'data/SimpleQA/FB2M.rel_voc.pickle'
-        self.vocab_pth = 'data/SimpleQuestions_yu/vocab.pth'
 
-        self.train_dataset_pth = './data/SimpleQuestions_yu/train.pkl'
-        self.dev_dataset_pth = './data/SimpleQuestions_yu/dev.pkl'
-        self.test_dataset_pth = './data/SimpleQuestions_yu/test.pkl'
+        self.relation_file = 'data/SimpleQuestions_v2/relation.id'
+        self.vocab_pth = 'data/SimpleQuestions_v2/vocab.pth'
+
         self.graph_file = './data/SimpleQuestions_yu/FB2M_subgraph.txt'
 
-        self.save_pth = 'results/simpleQA/model-layer_4-dropout_0.0.pth'
+        self.save_pth = 'results/simpleQA/baseline.pth'
 
-        self.word_pretrained_pth = './data/SimpleQuestions_yu/word_pretrained.pth'
+        self.word_pretrained_pth = './data/SimpleQuestions_v2/word_pretrained.pth'
+
         # self.word_pretrained_pth = None
         self.kb_triplets_pth = './data/SimpleQuestions_yu/kb_triplets.pth'
         self.relation_pretrained_pth = None
@@ -172,8 +172,9 @@ class TestConfig:
 
 if __name__ == '__main__':
     import sys
-    if sys.argv[1] == '--train':
+    if sys.argv[1] == '--supervised':
         args = DefaultConfig()
+        args.mode = 'supervised'
         main(args)
     elif sys.argv[1] == '--test':
         args = TestConfig()
@@ -183,3 +184,4 @@ if __name__ == '__main__':
         SimpleQADataset.generate_dataset(args)
         # SimpleQADataset.generate_embedding(args,device)
         SimpleQADataset.generate_graph(args,device)
+

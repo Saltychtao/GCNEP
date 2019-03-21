@@ -19,13 +19,13 @@ class SimpleQADataset(Dataset):
     def __init__(self,filename,vocab,batch_size,kb_triplets,ns=0,train=True):
 
         self.vocab = vocab
-        self.read_file(filename,vocab)
+        self.read_file(filename)
         self.filename = filename
         self.batch_size = batch_size
         self.ns = ns
         self.kb_triplets = kb_triplets
 
-    def read_file(self,filename,vocab):
+    def read_file(self,filename):
 
         self.label_dict = defaultdict(lambda: [])
         self.label_set = set()
@@ -33,27 +33,30 @@ class SimpleQADataset(Dataset):
         self.length = 0
         with open(filename,'r') as f:
             for line in f:
-                question,relation_words_p,relation_p = line.rstrip().split('\t')
-                self.label_dict[relation_p].append(cnt)
-                self.label_set.add(relation_p)
+
+                gold,neg,question = line.rstrip().split('\t')
+                self.label_dict[int(gold)].append(cnt)
+                self.label_set.add(int(gold) + 1)
+                if cnt % 1000 == 0:
+                    print('\r{}'.format(cnt),end='')
                 cnt += 1
                 self.length += 1
 
     def process_line(self,line):
-        question,relation_words_p,relation_p = line.rstrip().split('\t')
-        example = dict()
-        example['question'] = question.split()
-        example['relation_words_p'] = relation_words_p.split()
-        example['relation_p'] = relation_p
+        gold,neg,question = line.rstrip().split('\t')
 
-        question = [self.vocab.stoi.get(word,1) for word in example['question']]
-        relation_p = self.vocab.rtoi[example['relation_p']]
-        relation_words_p = self.vocab.relIdx2wordIdx[relation_p]
-
+        question = [self.vocab.stoi.get(word,1) for word in question.split()]
+        relations = []
+        relations.append(int(gold)+1)
+        for n in neg.split():
+            try:
+                idx = int(n) + 1
+                relations.append(idx)
+            except ValueError:
+                pass
         return {
             'question': question,
-            'relation_words': [relation_words_p],
-            'relation': [relation_p],
+            'relations': relations,
         }
 
     def get_label_set(self):
@@ -80,17 +83,14 @@ class SimpleQADataset(Dataset):
         instance = self.process_line(line)
         pos = instance['relation'][0]
         if self.ns > 0:
-            ns = 0
-            while ns < self.ns:
+            while len(instance['relations']) - 1 < self.ns:
                 idx = random.randint(0,len(self.vocab.rtoi) - 1)
-                if idx in instance['relation']:
+                if idx in instance['relations']:
                     continue
-                instance['relation'].append(idx)
-                ns += 1
+                instance['relations'].append(idx)
         else:
-            neg = [i for i in range(len(self.vocab.rtoi))]
-            neg.remove(pos)
-            instance['relation'] = [pos] + neg
+            while len(instance['relations']) - 1 < 200:
+                instance['relations'].append(0)
 
         sampled_kb_triplets = list(filter(lambda x:x[1] == pos,self.kb_triplets))
         instance['kb_triplets'] = sampled_kb_triplets
@@ -99,29 +99,22 @@ class SimpleQADataset(Dataset):
     @staticmethod
     def build_vocab(filenames,args):
         vocab = SimpleQAVocab()
-        vocab.stoi = {'<pad>':0,'<unk>':1}
-        vocab.rtoi = {}
-        relation_set = set()
-        with open(args.relation_file,'rb') as f:
-            import pickle
-            rel_voc = pickle.load(f)
-            for key,val in rel_voc.items():
-                try:
-                    int(key)
-                    pass
-                except ValueError:
-                    vocab.renew_vocab([key],'rtoi')
+        vocab.stoi = {'<pad>':0,'<unk>':1,'<relpad>':2}
+        vocab.rtoi = {'<relpad>':0}
+        with open(args.relation_file,'r') as f:
+            for line in f.readlines():
+                relation = line.rstrip()
+                vocab.rtoi[relation] = len(vocab.rtoi)
+                vocab.renew_vocab(relation.replace('.',' ').replace('_',' ').split(),'stoi')
         for filepath in filenames:
             with open(filepath,'r') as f:
                 for line in f:
-                    question,relation_words_p,relation_p = line.rstrip().split('\t')
-                    relation_set.add(relation_p)
+                    gold,neg,question = line.rstrip().split('\t')
                     vocab.renew_vocab(question.split(),'stoi')
-                    vocab.renew_vocab(relation_words_p.split(),'stoi')
 
         for rel,idx in vocab.rtoi.items():
             relation_words = rel.replace('.',' ').replace('_',' ').split()
-            vocab.relIdx2wordIdx[idx] = [vocab.stoi.get(w,1) for w in relation_words]
+            vocab.relIdx2wordIdx[idx] = [vocab.stoi[w] for w in relation_words]
 
         return vocab
 
@@ -198,8 +191,10 @@ class SimpleQADataset(Dataset):
     @staticmethod
     def collate_fn(list_of_examples):
         question = np.array(pad([x['question'] for x in list_of_examples],0))
-        relation = [x['relation'] for x in list_of_examples]
-        labels = [0 for i in range(len(relation))]
+
+        relation = [x['relations'] for x in list_of_examples]
+
+        labels = [0] * len(relation)
 
         kb_triplets_list = []
         for x in list_of_examples:
