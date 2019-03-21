@@ -43,10 +43,10 @@ class SimpleQADataset(Dataset):
 
         question = [self.vocab.stoi.get(word,1) for word in question.split()]
         relations = []
-        relations.append(int(gold))
+        relations.append(int(gold)+1)
         for n in neg.split():
             try:
-                idx = int(n)
+                idx = int(n) + 1
                 relations.append(idx)
             except ValueError:
                 pass
@@ -84,7 +84,6 @@ class SimpleQADataset(Dataset):
         with open(args.relation_file,'r') as f:
             for line in f.readlines():
                 relation = line.rstrip()
-                vocab.renew_vocab(relation.split('.'),'stoi')
                 vocab.rtoi[relation] = len(vocab.rtoi)
                 vocab.renew_vocab(relation.replace('.',' ').replace('_',' ').split(),'stoi')
         for filepath in filenames:
@@ -95,9 +94,7 @@ class SimpleQADataset(Dataset):
 
         for rel,idx in vocab.rtoi.items():
             relation_words = rel.replace('.',' ').replace('_',' ').split()
-            relation_names = rel.replace('.',' ').split()
             vocab.relIdx2wordIdx[idx] = [vocab.stoi[w] for w in relation_words]
-            vocab.relIdx2nameIdx[idx] = [vocab.stoi[n] for n in relation_names]
 
         return vocab
 
