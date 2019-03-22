@@ -25,6 +25,10 @@ class SimpleQADataset(Dataset):
         self.ns = ns
         self.kb_triplets = kb_triplets
 
+        self.kb_rel_set = set()
+        for _,r,_ in self.kb_triplets:
+            self.kb_rel_set.add(r)
+
     def read_file(self,filename):
 
         self.label_dict = defaultdict(lambda: [])
@@ -33,10 +37,9 @@ class SimpleQADataset(Dataset):
         self.length = 0
         with open(filename,'r') as f:
             for line in f:
-
                 gold,neg,question = line.rstrip().split('\t')
                 self.label_dict[int(gold)].append(cnt)
-                self.label_set.add(int(gold) + 1)
+                self.label_set.add(int(gold))
                 if cnt % 1000 == 0:
                     print('\r{}'.format(cnt),end='')
                 cnt += 1
@@ -47,10 +50,10 @@ class SimpleQADataset(Dataset):
 
         question = [self.vocab.stoi.get(word,1) for word in question.split()]
         relations = []
-        relations.append(int(gold)+1)
+        relations.append(int(gold))
         for n in neg.split():
             try:
-                idx = int(n) + 1
+                idx = int(n)
                 relations.append(idx)
             except ValueError:
                 pass
@@ -84,15 +87,22 @@ class SimpleQADataset(Dataset):
         pos = instance['relations'][0]
         if self.ns > 0:
             while len(instance['relations']) - 1 < self.ns:
-                idx = random.randint(0,len(self.vocab.rtoi) - 1)
+                idx = random.randint(1,len(self.vocab.rtoi) - 1)
                 if idx in instance['relations']:
                     continue
                 instance['relations'].append(idx)
         else:
             while len(instance['relations']) - 1 < 200:
                 instance['relations'].append(0)
-
+        try:
+            int(pos)
+        except ValueError:
+            print('pos is not a int!')
         sampled_kb_triplets = list(filter(lambda x:x[1] == pos,self.kb_triplets))
+        if len(sampled_kb_triplets) <= 0:
+            print(self.vocab.itor[pos])
+            print(self.kb_rel_set)
+            exit()
         instance['kb_triplets'] = sampled_kb_triplets
         return instance
 
@@ -100,10 +110,12 @@ class SimpleQADataset(Dataset):
     def build_vocab(filenames,args):
         vocab = SimpleQAVocab()
         vocab.stoi = {'<pad>':0,'<unk>':1,'<relpad>':2}
-        vocab.rtoi = {'<relpad>':0}
+        vocab.rtoi = {}
+        vocab.itor = {}
         with open(args.relation_file,'r') as f:
             for line in f.readlines():
                 relation = line.rstrip()
+                vocab.itor[len(vocab.rtoi)] = relation
                 vocab.rtoi[relation] = len(vocab.rtoi)
                 vocab.renew_vocab(relation.replace('.',' ').replace('_',' ').split(),'stoi')
         for filepath in filenames:
