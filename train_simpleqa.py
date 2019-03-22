@@ -59,8 +59,8 @@ def main(args):
             test_subset = test_dataset.get_subset(fold,mode='seen')
 
             with open('fold/fold{}.txt'.format(str(i)),'w') as f:
-                f.write('Training Subset labels: {}'.format(','.join(list(train_rels - set(fold)))) + '\n')
-                f.write('Test Subset labels: {}\n'.format(','.join(fold)))
+                f.write('Training Subset labels: {}'.format(','.join(map(str,list(train_rels - set(fold))))) + '\n')
+                f.write('Test Subset labels: {}\n'.format(','.join(map(str,fold))))
 
             test_acc = train(args,train_subset,dev_subset,test_subset,vocab,SimpleQADataset.collate_fn)
             with open('fold/fold{}.txt'.format(str(i)),'a') as f:
@@ -179,9 +179,13 @@ if __name__ == '__main__':
     elif sys.argv[1] == '--test':
         args = TestConfig()
         main(args)
+    elif sys.argv[1] == '--zero-shot':
+        args = DefaultConfig()
+        args.mode = 'zero-shot'
+        main(args)
     elif sys.argv[1] == '--generate':
         args = DefaultConfig()
         SimpleQADataset.generate_dataset(args)
-        # SimpleQADataset.generate_embedding(args,device)
+        SimpleQADataset.generate_embedding(args,device)
         SimpleQADataset.generate_graph(args,device)
 

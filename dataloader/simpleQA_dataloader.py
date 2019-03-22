@@ -214,7 +214,7 @@ class SimpleQADataset(Dataset):
     @staticmethod
     def load_dataset(args):
         vocab = torch.load(args.vocab_pth,pickle_module=dill)
-        filepaths = ['dev.tsv','dev.tsv','test.tsv']
+        filepaths = ['train.tsv','dev.tsv','test.tsv']
         for i in range(len(filepaths)):
             filepaths[i] = os.path.join(args.data_dir,filepaths[i])
 
