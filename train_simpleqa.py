@@ -132,6 +132,8 @@ class DefaultConfig:
         self.relation_file = 'data/SimpleQuestions/relation.id'
         self.vocab_pth = 'data/SimpleQuestions/vocab.pth'
 
+        self.gcn = False
+
         self.graph_file = './data/SimpleQuestions/FB2M_subgraph.txt'
 
         self.save_pth = 'results/simpleQA/gcn.pth'
@@ -143,6 +145,9 @@ class DefaultConfig:
         self.relation_pretrained_pth = None
 
         self.glove_pth = '/home/user_data/lijh/data/english_embeddings/glove.6B.300d.txt'
+
+        import pprint
+        pprint.pprint(self.__dict__)
 
 
 class TestConfig:
@@ -188,4 +193,3 @@ if __name__ == '__main__':
         SimpleQADataset.generate_dataset(args)
         SimpleQADataset.generate_embedding(args,device)
         SimpleQADataset.generate_graph(args,device)
-
