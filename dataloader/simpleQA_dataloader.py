@@ -6,6 +6,7 @@ import os
 import dill
 import numpy as np
 import random
+import networkx as nx
 
 from utils.util import pad,load_pretrained
 from utils.graph_util import build_graph_from_triplets
@@ -13,21 +14,28 @@ from dataloader.vocab import SimpleQAVocab
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def pairwise_distances(x,y=None):
+
+    x_norm = (x**2).sum(1).view(-1,1)
+    if y is not None:
+        y_norm = (y**2).sum(1).view(1,-1)
+    else:
+        y=x
+        y_norm = x_norm.view(1,-1)
+
+    dist = x_norm + y_norm - 2.0*torch.mm(x,torch.transpose(y,0,1))
+    return dist
+
 
 class SimpleQADataset(Dataset):
 
-    def __init__(self,filename,vocab,batch_size,kb_triplets,ns=0,train=True):
+    def __init__(self,filename,vocab,batch_size,ns=0,train=True):
 
         self.vocab = vocab
         self.read_file(filename)
         self.filename = filename
         self.batch_size = batch_size
         self.ns = ns
-        self.kb_triplets = kb_triplets
-
-        self.kb_rel_set = set()
-        for _,r,_ in self.kb_triplets:
-            self.kb_rel_set.add(r)
 
     def read_file(self,filename):
 
@@ -94,16 +102,6 @@ class SimpleQADataset(Dataset):
         else:
             while len(instance['relations']) - 1 < 200:
                 instance['relations'].append(0)
-        try:
-            int(pos)
-        except ValueError:
-            print('pos is not a int!')
-        sampled_kb_triplets = list(filter(lambda x:x[1] == pos,self.kb_triplets))
-        if len(sampled_kb_triplets) <= 0:
-            print(self.vocab.itor[pos])
-            print(self.kb_rel_set)
-            exit()
-        instance['kb_triplets'] = sampled_kb_triplets
         return instance
 
     @staticmethod
@@ -115,8 +113,9 @@ class SimpleQADataset(Dataset):
         with open(args.relation_file,'r') as f:
             for line in f.readlines():
                 relation = line.rstrip()
-                vocab.itor[len(vocab.rtoi)] = relation
-                vocab.rtoi[relation] = len(vocab.rtoi)
+                if relation not in vocab.rtoi:
+                    vocab.itor[len(vocab.rtoi)] = relation
+                    vocab.rtoi[relation] = len(vocab.rtoi)
                 vocab.renew_vocab(relation.replace('.',' ').replace('_',' ').split(),'stoi')
         for filepath in filenames:
             with open(filepath,'r') as f:
@@ -131,7 +130,7 @@ class SimpleQADataset(Dataset):
         return vocab
 
     @staticmethod
-    def generate_dataset(args):
+    def generate_vocab(args):
         filepaths = ['train.tsv','dev.tsv','test.tsv']
         for i in range(len(filepaths)):
             filepaths[i] = os.path.join(args.data_dir,filepaths[i])
@@ -151,39 +150,31 @@ class SimpleQADataset(Dataset):
     def generate_graph(args,device):
         vocab = torch.load(args.vocab_pth)
 
-        vocab.etoi = {'<unk>':1}
-        triplets = []
-
         print('Total Relations: {}'.format(len(vocab.rtoi)))
 
-        rcount = defaultdict(lambda : 0)
-
-        with open(args.graph_file,'r') as f:
-            cnt = 0
+        print(vocab.rtoi)
+        vecs = np.random.normal(0,1,(len(vocab.rtoi),50))
+        vecs[args.padding_idx] = np.zeros((50))
+        cnt = 0
+        with open(args.relation_vec_pth,'r') as f:
             for line in f:
-                h,r,t = line.rstrip().split()
-                if rcount[r] > 300:
+                splited = line.split('\t')
+                word = splited[0]
+                vec = splited[1]
+                if word not in vocab.rtoi:
                     continue
-                triplets.append((h,r,t))
-                rcount[r] += 1
                 cnt += 1
-                if cnt % 1000 == 0:
-                    print('\r{}'.format(cnt),end='')
-        vocab.etoi = {'<unk>':1}
-        for h,r,t in triplets:
-            vocab.renew_vocab([h,t],'etoi')
-        print('Total Entities : {}'.format(len(vocab.etoi)))
+                vec = [float(f) for f in vec.split()]
+                vecs[vocab.rtoi[word]] = vec
+            print('Found word vectors: {}/{}'.format(cnt,len(vocab.rtoi)))
+        relation_pretrained = torch.from_numpy(vecs).float().to(device)
+        distance_matrix = pairwise_distances(relation_pretrained)
+        print(distance_matrix.mean())
+        adj_matrix = (distance_matrix < args.threshold).long().cpu().numpy()
+        print(adj_matrix.sum())
 
-        numeralized_triplets = []
-        for h,r,t in triplets:
-            numeralized_triplets.append((vocab.etoi[h],vocab.rtoi[r],vocab.etoi[t]))
-
-        print()
-        print('Filtered Entities: {}'.format(len(vocab.etoi)))
-        print('Filtered Triplets: {}'.format(len(numeralized_triplets)))
-
-        torch.save(vocab,args.vocab_pth)
-        torch.save(numeralized_triplets,args.kb_triplets_pth)
+        torch.save(adj_matrix,args.relation_adj_matrix_pth)
+        torch.save(relation_pretrained,args.relation_pretrained_pth)
 
     @staticmethod
     def collate_fn(list_of_examples):
@@ -193,46 +184,43 @@ class SimpleQADataset(Dataset):
 
         labels = [0] * len(relation)
 
-        kb_triplets_list = []
-        for x in list_of_examples:
-            kb_triplets_list.extend(x['kb_triplets'])
-        kb_triplets_set = set(kb_triplets_list)
-        assert len(kb_triplets_set) > 0
-        rel_set = set()
-        src,rel,tgt = [],[],[]
-        for (h,r,t) in kb_triplets_set:
-            rel_set.add(r)
-            src.append(h)
-            rel.append(r)
-            tgt.append(t)
+        # kb_triplets_list = []
+        # for x in list_of_examples:
+        #     kb_triplets_list.extend(x['kb_triplets'])
+        # kb_triplets_set = set(kb_triplets_list)
+        # assert len(kb_triplets_set) > 0
+        # rel_set = set()
+        # src,rel,tgt = [],[],[]
+        # for (h,r,t) in kb_triplets_set:
+        #     rel_set.add(r)
+        #     src.append(h)
+        #     rel.append(r)
+        #     tgt.append(t)
 
-        src,rel,tgt = np.array(src),np.array(rel),np.array(tgt)
-        uniq_v,edges = np.unique((src,tgt),return_inverse=True)
-        src,dst = np.reshape(edges,(2,-1))
-        num_rels = len(rel_set)
-        g,rel,norm = build_graph_from_triplets(num_nodes=len(uniq_v),num_rels=num_rels,triplets=(src,rel,dst))
+        # src,rel,tgt = np.array(src),np.array(rel),np.array(tgt)
+        # uniq_v,edges = np.unique((src,tgt),return_inverse=True)
+        # src,dst = np.reshape(edges,(2,-1))
+        # num_rels = len(rel_set)
+        # g,rel,norm = build_graph_from_triplets(num_nodes=len(uniq_v),num_rels=num_rels,triplets=(src,rel,dst))
         # deg = g.in_degrees(range(g.number_of_nodes())).float().view(-1,1).to(device)
 
         return {
             'question':question,
             'relation':np.array(relation),
             'labels':np.array(labels),
-            'uniq_v':uniq_v,
-            'rel':rel,
-            'norm':norm,
-            'g':g
+            # 'uniq_v':uniq_v,
+            # 'rel':rel,
+            # 'norm':norm,
+            # 'g':g
         }
 
     @staticmethod
-    def load_dataset(args):
-        vocab = torch.load(args.vocab_pth,pickle_module=dill)
-        filepaths = ['train.tsv','dev.tsv','test.tsv']
-        for i in range(len(filepaths)):
-            filepaths[i] = os.path.join(args.data_dir,filepaths[i])
+    def load_dataset(train_fname,dev_fname,test_fname,vocab_pth,args):
+        vocab = torch.load(vocab_pth,pickle_module=dill)
 
-        train_dataset = SimpleQADataset(filepaths[0],vocab,args.batch_size,args.kb_triplets,args.ns)
-        dev_dataset = SimpleQADataset(filepaths[1],vocab,args.batch_size,args.kb_triplets,ns=0)
-        test_dataset = SimpleQADataset(filepaths[2],vocab,args.batch_size,args.kb_triplets,ns=0)
+        train_dataset = SimpleQADataset(train_fname,vocab,args.batch_size,args.ns)
+        dev_dataset = SimpleQADataset(dev_fname,vocab,args.batch_size,ns=0)
+        test_dataset = SimpleQADataset(test_fname,vocab,args.batch_size,ns=0)
 
         return train_dataset, dev_dataset, test_dataset
 

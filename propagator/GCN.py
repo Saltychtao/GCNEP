@@ -152,21 +152,16 @@ class RGCNTransLayer(RGCNLayer):
     @overrides
     def __init__(self,in_feat,out_feat,num_rels,rel_dim,activation,bias=None,self_loop=False,dropout=0.0):
         super(RGCNTransLayer, self).__init__(in_feat,out_feat,bias,activation=None,self_loop=self_loop,dropout=dropout)
-
-        self.num_rels = num_rels
-        self.rel_embedding = nn.Embedding(num_rels,rel_dim,padding_idx=0)
+        self.linear = nn.Linear(in_feat,out_feat)
 
     def msg_func(self,edges):
-        src = edges.src['h']
-        rel = self.rel_embedding(edges.data['type'])
-        msg = src - rel
-        return {'msg':msg}
+        return {'msg':edges.src['h']}
 
     def propagate(self,g):
         g.update_all(self.msg_func,fn.sum(msg='msg',out='h'),self.apply_func)
 
     def apply_func(self,nodes):
-        return {'h':nodes.data['h']*nodes.data['norm']}
+        return {'h': F.relu(self.linear(nodes.data['h']*nodes.data['norm']))}
 
 
 class BaseRGCN(nn.Module):
@@ -222,13 +217,6 @@ class BaseRGCN(nn.Module):
         for layer in self.layers:
             layer(g)
         return g.ndata.pop('h')
-
-    def relation_embedding(self,data):
-        embeddings = []
-        for layer in self.layers:
-            if hasattr(layer,'rel_embedding'):
-                embeddings.append(layer.rel_embedding(data))
-        return torch.stack(embeddings,dim=0).mean(0)
 
 
 class EmbeddingLayer(nn.Module):

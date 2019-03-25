@@ -1,4 +1,8 @@
 import torch
+import dgl
+import dill
+import os
+import numpy as np
 from torch.utils.data import DataLoader
 from dataloader.simpleQA_dataloader import SimpleQADataset
 from learner.SimpleQA import SimpleQA
@@ -21,15 +25,41 @@ def main(args):
     import time
     start_time = time.time()
     vocab = SimpleQADataset.load_vocab(args)
-    args.kb_triplets = torch.load(args.kb_triplets_pth)
-    train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(args)
+    adj_matrix = torch.load(args.relation_adj_matrix_pth)
+    print('Relation Adj matrix loaded!')
+    num_nodes = len(adj_matrix)
+    print('Total number of relations :{}'.format(num_nodes))
+    src = []
+    dst = []
+    triplets = []
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            if adj_matrix[i][j] == 1:
+                src.append(i)
+                dst.append(j)
+                triplets.append((i,j))
+    g = dgl.DGLGraph()
+    g.add_nodes(num_nodes)
+    g.add_edges(src,dst)
+
+    def comp_deg_norm(g):
+        in_deg = g.in_degrees(range(g.number_of_nodes())).float().numpy()
+        norm = 1.0 / in_deg
+        norm[np.isinf(norm)] = 0
+        return norm
+    norm = comp_deg_norm(g)
+    node_id = torch.arange(0,num_nodes,dtype=torch.long).view(-1,1).to(device)
+    norm = torch.from_numpy(norm).view(-1,1).to(device)
+    g.ndata.update({'id':node_id,'norm':norm})
+    print('Building Relation Graph ... Done.')
+    args.relation_graph = g
+    args.relation_pretrained = torch.load(args.relation_pretrained_pth)
     end_time = time.time()
     print('Loaded dataset in {:.2f}s'.format(end_time - start_time))
 
     args.n_words = len(vocab.stoi)
     args.n_relations = len(vocab.rtoi)
     args.all_relation_words = vocab.get_all_relation_words()
-    args.n_entities = len(vocab.etoi)
 
     if args.word_pretrained_pth is not None:
         args.word_pretrained = torch.load(args.word_pretrained_pth)
@@ -46,25 +76,19 @@ def main(args):
         print(' Using random initialized label word embedding.')
 
     if args.mode == 'supervised':
+        train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(args)
         train(args,train_dataset,dev_dataset,test_dataset,vocab,SimpleQADataset.collate_fn)
     elif args.mode == 'zero-shot':
-        train_rels = train_dataset.get_label_set()
-        test_rels = test_dataset.get_label_set()
-        folds = generate_folds(test_rels)
-
-        for i,fold in enumerate(folds):
-            print('Training Folds :{}'.format(i))
-            train_subset = train_dataset.get_subset(fold,mode='unseen')
-            dev_subset = dev_dataset.get_subset(fold,mode='unseen')
-            test_subset = test_dataset.get_subset(fold,mode='seen')
-
-            with open('fold/fold{}.txt'.format(str(i)),'w') as f:
-                f.write('Training Subset labels: {}'.format(','.join(map(str,list(train_rels - set(fold))))) + '\n')
-                f.write('Test Subset labels: {}\n'.format(','.join(map(str,fold))))
-
-            test_acc = train(args,train_subset,dev_subset,test_subset,vocab,SimpleQADataset.collate_fn)
-            with open('fold/fold{}.txt'.format(str(i)),'a') as f:
-                f.write('Test Acc : {:.2f}'.format(test_acc))
+        base_data_dir = args.data_dir
+        base_save_dir = args.save_dir
+        for i in range(10):
+            print(' Training Fold {}'.format(i))
+            train_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'train.tsv')
+            dev_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'dev.tsv')
+            test_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'test.tsv')
+            train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(train_fname,dev_fname,test_fname,args.vocab_pth,args)
+            args.save_dir = os.path.join(base_save_dir,'fold-{}'.format(str(i)))
+            train(args,train_dataset,dev_dataset,test_dataset,vocab,SimpleQADataset.collate_fn)
 
 
 def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
@@ -81,28 +105,33 @@ def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
     print('Building Model...',end='')
     model = SimpleQA(args).to(device)
     print('Done')
+    if not os.path.exists(args.save_dir):
+        os.mkdir(args.save_dir)
 
     best_acc = -1.
     patience = args.patience
     test_acc = -1.
+    logfile = open(os.path.join(args.save_dir,'log.txt'),'w')
     for epoch in range(args.epoch):
         model.train_epoch(train_iter)
         dev_acc = model.evaluate(dev_iter)
         patience -= 1
 
         print(' \nEpoch {}, Patience : {}, Dev Acc : {:.2f}'.format(epoch,patience,dev_acc*100))
+        print(' \nEpoch {}, Patience : {}, Dev Acc : {:.2f}'.format(epoch,patience,dev_acc*100),file=logfile)
         if patience > 0 and dev_acc > best_acc:
             best_acc = dev_acc
-            torch.save(model.state_dict(),args.save_pth)
+            torch.save(model.state_dict(),os.path.join(args.save_dir,'model.pth'))
             patience = args.patience
 
         if patience == 0:
             model = SimpleQA(args).to(device)
-            model.load_state_dict(torch.load(args.save_pth))
-
+            model.load_state_dict(torch.load(os.path.join(args.save_dir,'model.pth')))
             dev_acc = model.evaluate(dev_iter)
             test_acc = model.evaluate(test_iter)
             print('Dev Acc: {:.2f}, Test Acc :{:.2f}'.format(dev_acc*100,test_acc*100))
+            print('Dev Acc: {:.2f}, Test Acc :{:.2f}'.format(dev_acc*100,test_acc*100),file=logfile)
+            logfile.close()
             return test_acc
 
 
@@ -113,11 +142,16 @@ class DefaultConfig:
         self.relation_dim = 300
         self.batch_size = 64
         self.epoch = 100
-        self.data_dir = 'data/SimpleQuestions'
+        self.data_dir = None
         self.lr = 1e-3
         self.margin = 0.1
         self.ns = 256
         self.patience = 5
+
+        self.data_dir = './data/SimpleQuestions/10-fold-dataset-tsv'
+        self.vocab_pth = os.path.join(self.data_dir,'vocab.pth')
+        self.relation_file = os.path.join(self.data_dir,'relation.id')
+        self.word_pretrained_pth = os.path.join(self.data_dir,'word_pretrained.pth')
 
         self.freeze = True
         self.num_bases = 100
@@ -129,22 +163,15 @@ class DefaultConfig:
         self.unk_idx = 1
         self.unk_token = '<unk>'
 
-        self.relation_file = 'data/SimpleQuestions/relation.id'
-        self.vocab_pth = 'data/SimpleQuestions/vocab.pth'
-
-        self.gcn = False
-
-        self.graph_file = './data/SimpleQuestions/FB2M_subgraph.txt'
-
-        self.save_pth = 'results/simpleQA/gcn.pth'
-
-        self.word_pretrained_pth = './data/SimpleQuestions/word_pretrained.pth'
-
-        # self.word_pretrained_pth = None
-        self.kb_triplets_pth = './data/SimpleQuestions/kb_triplets.pth'
-        self.relation_pretrained_pth = None
+        self.save_dir = 'results/simpleQA/gcn'
 
         self.glove_pth = '/home/user_data/lijh/data/english_embeddings/glove.6B.300d.txt'
+        self.relation_vec_pth = './data/SimpleQuestions/relation2vec.txt'
+
+        self.relation_pretrained_pth = './data/SimpleQuestions/relation_pretrained.pth'
+        self.relation_adj_matrix_pth = './data/SimpleQuestions/relation_adj_matrix.pth'
+
+        self.threshold = 10
 
         import pprint
         pprint.pprint(self.__dict__)
@@ -180,6 +207,10 @@ if __name__ == '__main__':
     if sys.argv[1] == '--supervised':
         args = DefaultConfig()
         args.mode = 'supervised'
+        args.data_dir = './data/SimpleQuestions'
+        args.vocab_pth = os.path.join(args.data_dir,'vocab.pth')
+        args.relation_file = os.path.join(args.data_dir,'relation.id')
+        args.word_pretrained_pth = os.path.join(args.data_dir,'word_pretrained.pth')
         main(args)
     elif sys.argv[1] == '--test':
         args = TestConfig()
@@ -187,9 +218,14 @@ if __name__ == '__main__':
     elif sys.argv[1] == '--zero-shot':
         args = DefaultConfig()
         args.mode = 'zero-shot'
+        args.data_dir = './data/SimpleQuestions/10-fold-dataset-tsv'
+        args.vocab_pth = os.path.join(args.data_dir,'vocab.pth')
+        args.relation_file = os.path.join(args.data_dir,'relation.id')
+        args.word_pretrained_pth = os.path.join(args.data_dir,'word_pretrained.pth')
         main(args)
     elif sys.argv[1] == '--generate':
         args = DefaultConfig()
-        SimpleQADataset.generate_dataset(args)
+        args.data_dir = os.path.join(args.data_dir,'base')
+        SimpleQADataset.generate_vocab(args)
         SimpleQADataset.generate_embedding(args,device)
         SimpleQADataset.generate_graph(args,device)

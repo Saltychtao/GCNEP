@@ -18,7 +18,7 @@ class SimpleQA(nn.Module):
             self.word_embedding = nn.Embedding.from_pretrained(args.word_pretrained,freeze=args.freeze)
 
         self.rgcn = RGCN(
-            args.n_entities,
+            args.n_relations,
             args.relation_dim,
             args.relation_dim,
             2*args.n_relations,
@@ -55,6 +55,7 @@ class SimpleQA(nn.Module):
         self.score_function = nn.CosineSimilarity(dim=2)
 
         self.all_relation_words = args.all_relation_words
+        self.relation_graph = args.relation_graph
 
         self.n_relations = args.n_relations
         self.args = args
@@ -63,7 +64,7 @@ class SimpleQA(nn.Module):
     def reset_parameters(self):
         torch.nn.init.xavier_uniform_(self.relation_embedding.weight)
 
-    def forward(self,question,relation,g):
+    def forward(self,question,relation):
 
         n_rels = relation.size()[1]
         question_length = (question != self.args.padding_idx).sum(dim=1).long().to(device)
@@ -77,8 +78,8 @@ class SimpleQA(nn.Module):
         all_relations = torch.tensor([i for i in range(self.n_relations)]).to(device)
         all_relation_words = torch.tensor(self.all_relation_words).to(device)  # n_relations * max_len
 
-        self.rgcn.forward(g)
-        single_relation_repre = self.rgcn.relation_embedding(all_relations)
+        self.rgcn.forward(self.relation_graph)
+        single_relation_repre = self.rgcn.forward(self.relation_graph)
 
         relation_words_lengths = (all_relation_words != self.args.padding_idx).sum(dim=-1).long().to(device)
         relation_words_repre = self.word_embedding(all_relation_words)
@@ -105,15 +106,15 @@ class SimpleQA(nn.Module):
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
             labels = torch.tensor(batch['labels']).to(device)
-            node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
-            rel = torch.from_numpy(batch['rel']).view(-1).to(device)
-            norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
-            g = batch['g']
-            g.ndata.update({'id':node_id,'norm':norm})
-            g.edata['type'] = rel
+            # node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
+            # rel = torch.from_numpy(batch['rel']).view(-1).to(device)
+            # norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
+            # g = batch['g']
+            # g.ndata.update({'id':node_id,'norm':norm})
+            # g.edata['type'] = rel
             bsize = question.size()[0]
 
-            scores = self.forward(question,relation,g)  # bsize * (1 + ns)
+            scores = self.forward(question,relation)  # bsize * (1 + ns)
             batch_loss = self.loss_fn(scores,labels)
             self.optimizer.zero_grad()
             batch_loss.backward()
@@ -134,16 +135,16 @@ class SimpleQA(nn.Module):
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
             labels = torch.tensor(batch['labels']).to(device)
-            node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
-            rel = torch.from_numpy(batch['rel']).view(-1).to(device)
-            norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
-            g = batch['g']
-            g.ndata.update({'id':node_id,'norm':norm})
-            g.edata['type'] = rel
+            # node_id = torch.from_numpy(batch['uniq_v']).view(-1,1).to(device)
+            # rel = torch.from_numpy(batch['rel']).view(-1).to(device)
+            # norm = torch.from_numpy(batch['norm']).view(-1,1).to(device)
+            # g = batch['g']
+            # g.ndata.update({'id':node_id,'norm':norm})
+            # g.edata['type'] = rel
             bsize = question.size()[0]
 
             relation_mask = (1e9*(relation != 0) -1e9).float() # 1 -> 1, 0 -> -1
-            scores = self.forward(question,relation,g) # bsize * (1 + neg_num)
+            scores = self.forward(question,relation) # bsize * (1 + neg_num)
             correct += ((scores+relation_mask).argmax(dim=1) == labels).sum().item()
             total += bsize
 
