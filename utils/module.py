@@ -46,8 +46,9 @@ def mean_pool(input,length):
     return torch.div(input,length.float())
 
 
-def max_pool(input):
-    input[input == 0] = -1e9
+def max_pool(input,input_mask):
+    # 1 -> 1, 0 -> -1e9
+    input_mask = (1+1e9)*input_mask - 1e9
     return torch.max(input,dim=1)[0]
 
 
