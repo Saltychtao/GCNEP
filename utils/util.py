@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import yaml
 
 
 def pad(data,pad_idx,max_len=None):
@@ -40,3 +41,18 @@ def load_pretrained(filepath,vocab,dim,device,pad_idx):
         print('Found word vectors: {}/{}'.format(cnt,len(vocab)))
     tensor= torch.from_numpy(vecs)
     return tensor.float().to(device)
+
+
+def parse_args(parser):
+    args = parser.parse_args()
+    if args.config_file:
+        data = yaml.load(open(args.config_file))
+        arg_dict = args.__dict__
+        for key, value in data.items():
+            if isinstance(value, list):
+                arg_dict[key] = []
+                for v in value:
+                    arg_dict[key].append(v)
+            else:
+                arg_dict[key] = value
+    return args
