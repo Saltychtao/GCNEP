@@ -12,6 +12,7 @@ Adopted from DGL, https://github.com/dmlc/dgl/blob/master/examples/pytorch/rgcn
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from overrides import overrides
 import dgl.function as fn
@@ -153,20 +154,28 @@ class RGCNTransLayer(RGCNLayer):
     def __init__(self,in_feat,out_feat,num_rels,rel_dim,activation,bias=None,self_loop=False,dropout=0.0):
         super(RGCNTransLayer, self).__init__(in_feat,out_feat,bias,activation=None,self_loop=self_loop,dropout=dropout)
         self.linear = nn.Linear(in_feat,out_feat)
+        self.activation = activation
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.linear.weight.size(1))
+        self.linear.weight.data.uniform_(-stdv,stdv)
 
     def msg_func(self,edges):
-        return {'msg':edges.src['h']}
+        return {'msg':edges.src['h'] * edges.src['norm']}
 
     def propagate(self,g):
         g.update_all(self.msg_func,fn.sum(msg='msg',out='h'),self.apply_func)
 
     def apply_func(self,nodes):
-        return {'h': F.relu(self.linear(nodes.data['h']*nodes.data['norm']))}
+        if self.activation is not None:
+            return {'h': self.activation(self.linear(nodes.data['h']))}
+        else:
+            return {'h': self.linear(nodes.data['h'])}
 
 
 class BaseRGCN(nn.Module):
-    def __init__(self, num_nodes, h_dim, out_dim, num_rels, num_bases=-1,
-                 num_hidden_layers=1, dropout=0, use_cuda=False):
+    def __init__(self, g,num_nodes, h_dim, out_dim, num_rels, num_bases=-1,
+                 pretrained=None,num_hidden_layers=1, dropout=0, use_cuda=False):
         super(BaseRGCN, self).__init__()
         self.num_nodes = num_nodes
         self.h_dim = h_dim
@@ -176,6 +185,8 @@ class BaseRGCN(nn.Module):
         self.num_hidden_layers = num_hidden_layers
         self.dropout = dropout
         self.use_cuda = use_cuda
+        self.pretrained = pretrained
+        self.g = g
 
         # create rgcn layers
         self.build_model()
@@ -211,18 +222,21 @@ class BaseRGCN(nn.Module):
     def build_output_layer(self):
         return None
 
-    def forward(self, g):
+    def forward(self):
         if self.features is not None:
-            g.ndata['id'] = self.features
+            self.g.ndata['id'] = self.features
         for layer in self.layers:
-            layer(g)
-        return g.ndata.pop('h')
+            layer(self.g)
+        return self.g.ndata.pop('h')
 
 
 class EmbeddingLayer(nn.Module):
-    def __init__(self, num_nodes, h_dim):
+    def __init__(self, num_nodes, h_dim,pretrained=None):
         super(EmbeddingLayer, self).__init__()
-        self.embedding = torch.nn.Embedding(num_nodes, h_dim)
+        if pretrained is None:
+            self.embedding = torch.nn.Embedding(num_nodes, h_dim,padding_idx=0)
+        else:
+            self.embedding = torch.nn.Embedding.from_pretrained(pretrained,freeze=False)
 
     def forward(self, g):
         node_id = g.ndata['id'].squeeze()
@@ -231,7 +245,7 @@ class EmbeddingLayer(nn.Module):
 
 class RGCN(BaseRGCN):
     def build_input_layer(self):
-        return EmbeddingLayer(self.num_nodes, self.h_dim)
+        return EmbeddingLayer(self.num_nodes, self.h_dim,pretrained=self.pretrained)
 
     def build_hidden_layer(self, idx):
         act = F.relu if idx < self.num_hidden_layers - 1 else None
