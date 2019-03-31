@@ -6,13 +6,14 @@ import os
 import dill
 import numpy as np
 import random
-import networkx as nx
+
 
 from utils.util import pad,load_pretrained
 from utils.graph_util import build_graph_from_triplets
 from dataloader.vocab import SimpleQAVocab
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def pairwise_distances(x,y=None):
 
@@ -48,8 +49,6 @@ class SimpleQADataset(Dataset):
                 gold,neg,question = line.rstrip().split('\t')
                 self.label_dict[int(gold)].append(cnt)
                 self.label_set.add(int(gold))
-                if cnt % 1000 == 0:
-                    print('\r{}'.format(cnt),end='')
                 cnt += 1
                 self.length += 1
 
@@ -147,12 +146,8 @@ class SimpleQADataset(Dataset):
         torch.save(args.word_pretrained,args.word_pretrained_pth)
 
     @staticmethod
-    def generate_graph(args,device):
+    def generate_relation_embedding(args,device):
         vocab = torch.load(args.vocab_pth)
-
-        print('Total Relations: {}'.format(len(vocab.rtoi)))
-
-        print(vocab.rtoi)
         vecs = np.random.normal(0,1,(len(vocab.rtoi),50))
         vecs[args.padding_idx] = np.zeros((50))
         cnt = 0
@@ -168,13 +163,19 @@ class SimpleQADataset(Dataset):
                 vecs[vocab.rtoi[word]] = vec
             print('Found word vectors: {}/{}'.format(cnt,len(vocab.rtoi)))
         relation_pretrained = torch.from_numpy(vecs).float().to(device)
+        torch.save(relation_pretrained,args.relation_pretrained_pth)
+
+    @staticmethod
+    def generate_graph(args,device):
+        vocab = torch.load(args.vocab_pth)
+        print('Total Relations: {}'.format(len(vocab.rtoi)))
+        relation_pretrained = torch.load(args.relation_pretrained_pth)
         distance_matrix = pairwise_distances(relation_pretrained)
         print(distance_matrix.mean())
         adj_matrix = (distance_matrix < args.threshold).long().cpu().numpy()
         print(adj_matrix.sum())
 
         torch.save(adj_matrix,args.relation_adj_matrix_pth)
-        torch.save(relation_pretrained,args.relation_pretrained_pth)
 
     @staticmethod
     def collate_fn(list_of_examples):
@@ -184,34 +185,10 @@ class SimpleQADataset(Dataset):
 
         labels = [0] * len(relation)
 
-        # kb_triplets_list = []
-        # for x in list_of_examples:
-        #     kb_triplets_list.extend(x['kb_triplets'])
-        # kb_triplets_set = set(kb_triplets_list)
-        # assert len(kb_triplets_set) > 0
-        # rel_set = set()
-        # src,rel,tgt = [],[],[]
-        # for (h,r,t) in kb_triplets_set:
-        #     rel_set.add(r)
-        #     src.append(h)
-        #     rel.append(r)
-        #     tgt.append(t)
-
-        # src,rel,tgt = np.array(src),np.array(rel),np.array(tgt)
-        # uniq_v,edges = np.unique((src,tgt),return_inverse=True)
-        # src,dst = np.reshape(edges,(2,-1))
-        # num_rels = len(rel_set)
-        # g,rel,norm = build_graph_from_triplets(num_nodes=len(uniq_v),num_rels=num_rels,triplets=(src,rel,dst))
-        # deg = g.in_degrees(range(g.number_of_nodes())).float().view(-1,1).to(device)
-
         return {
             'question':question,
             'relation':np.array(relation),
             'labels':np.array(labels),
-            # 'uniq_v':uniq_v,
-            # 'rel':rel,
-            # 'norm':norm,
-            # 'g':g
         }
 
     @staticmethod
