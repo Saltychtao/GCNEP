@@ -38,6 +38,11 @@ def main(args):
             adj_matrix = torch.load(pth)
             print('Relation Adj matrix loaded!')
             print('Building Relation Graph ...',end='')
+            if not args.self_loop:
+                # remove self loop
+                print('Removing Self-Loop')
+                for i in range(adj_matrix.shape[0]):
+                    adj_matrix[i][i] = 0
             g = build_graph_from_adj_matrix(adj_matrix,device)
             print('Done.')
             args.relation_graphs.append(g)
@@ -203,6 +208,7 @@ if __name__ == '__main__':
     args_parser.add_argument('--evaluate',action="store_true",default=False)
     args_parser.add_argument('--visualize',action="store_true",default=False)
     args_parser.add_argument('--analysis',action="store_true",default=False)
+    args_parser.add_argument('--self_loop',default=True,)
     args = parse_args(args_parser)
     pprint(vars(args))
 

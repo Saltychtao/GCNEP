@@ -27,8 +27,6 @@ class SimpleQA(nn.Module):
                     args.n_relations,
                     args.sub_relation_dim,
                     args.sub_relation_dim,
-                    2*args.n_relations,
-                    args.num_bases,
                     args.relation_pretrained,
                     args.num_hidden_layers,
                     args.rgcn_dropout,
