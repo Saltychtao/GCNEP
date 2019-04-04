@@ -6,7 +6,7 @@ from tensorboardX import SummaryWriter
 from argparse import ArgumentParser
 from torch.utils.data import DataLoader
 from dataloader.simpleQA_dataloader import SimpleQADataset
-from learner.SimpleQA import SimpleQA
+from model.SimpleQA import SimpleQA
 from utils.graph_util import build_graph_from_adj_matrix
 from utils.visualize import plot
 from utils.util import parse_args

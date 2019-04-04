@@ -4,7 +4,7 @@ from sklearn import metrics
 
 from utils.module import LSTMEncoder,mean_pool,max_pool,GateNetwork
 from utils.metric import micro_precision,macro_precision
-from propagator.GCN import RGCN
+from model.GCN import RGCN
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 global_step = 0
