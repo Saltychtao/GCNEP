@@ -48,8 +48,8 @@ def mean_pool(input,length):
 
 def max_pool(input,input_mask):
     # 1 -> 0, 0 -> -1e9
-    max_mask = 1e9 * input_mask - 1e9
-    return torch.max(input+max_mask.unsqueeze(2).float(),dim=1)[0]
+    input[input == 0] = -1e9
+    return torch.max(input,dim=1)[0]
 
 
 class GateNetwork(nn.Module):

@@ -9,7 +9,6 @@ import random
 
 
 from utils.util import pad,load_pretrained
-from utils.graph_util import build_graph_from_triplets
 from dataloader.vocab import SimpleQAVocab
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
