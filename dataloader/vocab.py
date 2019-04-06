@@ -20,7 +20,11 @@ class SimpleQAVocab(Vocab):
 
     def get_all_relation_words(self):
         n_relations = len(self.rtoi)
-        return np.array(pad([self.relIdx2wordIdx[i] for i in range(n_relations)],0,max_len=20))
+        max_len = 0
+        for r,idx in self.rtoi.items():
+            max_len = max(max_len,len(self.relIdx2wordIdx[idx]))
+        print('Max length of relation is {}'.format(max_len))
+        return np.array(pad([self.relIdx2wordIdx[i] for i in range(n_relations)],0,max_len=max_len))
 
     def get_all_relation_names(self):
         n_relations = len(self.rtoi)
