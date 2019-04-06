@@ -79,7 +79,12 @@ class SimpleQA(nn.Module):
             for gcn in self.gcns:
                 embed = gcn.forward()
                 relation_embedding.append(embed)
-            return torch.cat(relation_embedding,dim=1)
+            if self.args.graph_aggr == 'concat':
+                return torch.cat(relation_embedding,dim=1)
+            elif self.args.graph_aggr == 'mean':
+                return torch.stack(relation_embedding,dim=0).mean(0)
+            elif self.args.graph_aggr == 'max':
+                return torch.stack(relation_embedding,dim=0).max(0)[0]
         else:
             all_relations = torch.tensor([i for i in range(self.n_relations)]).to(device)
             return self.relation_embedding(all_relations)

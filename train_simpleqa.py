@@ -37,7 +37,7 @@ def main(args):
         for pth in args.relation_adj_matrix_pth:
             adj_matrix = torch.load(pth)
             print('Relation Adj matrix loaded!')
-            print('Building Relation Graph ...',end='')
+            print('Building Relation Graph ...')
             if not args.self_loop:
                 # remove self loop
                 print('Removing Self-Loop')
@@ -46,7 +46,10 @@ def main(args):
             g = build_graph_from_adj_matrix(adj_matrix,device)
             print('Done.')
             args.relation_graphs.append(g)
-        args.sub_relation_dim = args.relation_dim // len(args.relation_graphs)
+        if args.graph_aggr == 'concat':
+            args.sub_relation_dim = args.relation_dim // len(args.relation_graphs)
+        else:
+            args.sub_relation_dim = args.relation_dim
 
     args.n_words = len(vocab.stoi)
     args.n_relations = len(vocab.rtoi)
@@ -208,6 +211,7 @@ if __name__ == '__main__':
     args_parser.add_argument('--evaluate',action="store_true",default=False)
     args_parser.add_argument('--visualize',action="store_true",default=False)
     args_parser.add_argument('--analysis',action="store_true",default=False)
+    args_parser.add_argument('--graph_aggr',type=str,default='concat')
     args_parser.add_argument('--self_loop',default=True,)
     args = parse_args(args_parser)
     pprint(vars(args))
