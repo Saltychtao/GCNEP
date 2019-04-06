@@ -72,6 +72,8 @@ class RGCNTransLayer(RGCNLayer):
         super(RGCNTransLayer, self).__init__(in_feat,out_feat,bias,activation=None,self_loop=self_loop,dropout=dropout)
         self.linear = nn.Linear(in_feat,out_feat)
         self.activation = activation
+        self.dropout = nn.Dropout(p=dropout)
+        self.reset_parameters()
 
     def reset_parameters(self):
         stdv = 1. / math.sqrt(self.linear.weight.size(1))
@@ -85,7 +87,7 @@ class RGCNTransLayer(RGCNLayer):
 
     def apply_func(self,nodes):
         if self.activation is not None:
-            return {'h': self.activation(self.linear(nodes.data['h']))}
+            return {'h': self.activation(self.linear(self.dropout(nodes.data['h'])))}
         else:
             return {'h': self.linear(nodes.data['h'])}
 
