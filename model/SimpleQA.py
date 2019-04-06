@@ -182,9 +182,8 @@ class SimpleQA(nn.Module):
 
             relation_mask = (1e9*(relation != 0) -1e9).float() # 1 -> 0, 0 -> -1e9
             scores = self.forward(question,relation) # bsize * (1 + neg_num)
-            correct_idx =  (scores+relation_mask).argmax(dim=1)
+            correct_idx = (scores+relation_mask).argmax(dim=1)
             pred.extend(relation[range(bsize),correct_idx].tolist())
-            # correct += ((scores+relation_mask).argmax(dim=1) == labels).sum().item()
             total += bsize
 
         return micro_precision(pred,gold),macro_precision(pred,gold)
