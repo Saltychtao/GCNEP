@@ -89,19 +89,6 @@ class SimpleQA(nn.Module):
             all_relations = torch.tensor([i for i in range(self.n_relations)]).to(device)
             return self.relation_embedding(all_relations)
 
-    def get_shift(self):
-        with torch.no_grad():
-            if not self.args.use_gcn:
-                relation_embedding = self.get_relation_embedding()
-            else:
-                relation_embedding = self.get_relation_embedding()
-            dim = relation_embedding.size()[1]
-            seen_relation = relation_embedding[self.args.seen_idx,:]
-            unseen_relation = relation_embedding[self.args.unseen_idx,:]
-            seen_relation_center = seen_relation.mean(dim=0)
-            unseen_relation_center = unseen_relation.mean(dim=0)
-            return torch.norm(seen_relation_center-unseen_relation_center,p=2).item() / dim
-
     def forward(self,question,relation):
 
         n_rels = relation.size()[1]
@@ -162,10 +149,6 @@ class SimpleQA(nn.Module):
 
             loss += batch_loss
             print('\r Batch {}/{}, Training Loss:{:.4f}, Training Acc:{:.2f}'.format(cur_batch,total_batch,loss/cur_batch,correct/total*100),end='')
-            center_distance = self.get_shift()
-            global global_step
-            global_step += 1
-            self.args.writer.add_scalar('center_distance',center_distance,global_step)
 
     def evaluate(self,dev_iter):
         self.eval()
@@ -187,3 +170,24 @@ class SimpleQA(nn.Module):
             total += bsize
 
         return micro_precision(pred,gold),macro_precision(pred,gold)
+
+    def predict(self,dev_iter):
+        self.eval()
+        total = 0
+        pred = []
+        gold = []
+        for batch in dev_iter:
+            question = torch.tensor(batch['question']).to(device)
+            relation = torch.tensor(batch['relation']).to(device)
+            labels = torch.tensor(batch['labels']).to(device)
+            bsize = question.size()[0]
+
+            gold.extend(relation[range(bsize),labels].tolist())
+
+            relation_mask = (1e9*(relation != 0) -1e9).float() # 1 -> 0, 0 -> -1e9
+            scores = self.forward(question,relation) # bsize * (1 + neg_num)
+            correct_idx = (scores+relation_mask).argmax(dim=1)
+            pred.extend(relation[range(bsize),correct_idx].tolist())
+            total += bsize
+
+        return gold,pred
