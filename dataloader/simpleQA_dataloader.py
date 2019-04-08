@@ -87,6 +87,9 @@ class SimpleQADataset(Dataset):
             idxs = set([i for i in range(self.__len__())]) - set(excluded)
         return torch.utils.data.Subset(self,list(set(idxs)))
 
+    def get_raw_instance(self,idx):
+        return linecache.getline(self.filename,idx+1)
+
     def __getitem__(self,item):
         line = linecache.getline(self.filename,item + 1)
         instance = self.process_line(line)

@@ -1,4 +1,6 @@
 from collections import defaultdict
+
+
 def micro_precision(pred,gold):
     correct = 0
     for p,g in zip(pred,gold):
@@ -6,8 +8,8 @@ def micro_precision(pred,gold):
             correct += 1
     return correct * 1.0 / len(gold)
 
-def macro_precision(pred,gold):
-    gold_set = set(gold)
+
+def each_precision(pred,gold):
     gold_relation_length = defaultdict(lambda:0)
     tp = defaultdict(lambda:0)
     for p,g in zip(pred,gold):
@@ -17,4 +19,9 @@ def macro_precision(pred,gold):
     each_precision = []
     for g in gold_relation_length:
         each_precision.append(tp[g]*1.0/gold_relation_length[g])
-    return sum(each_precision)/len(each_precision)
+    return each_precision
+
+
+def macro_precision(pred,gold):
+    precision = each_precision(pred,gold)
+    return sum(precision)/len(precision)
