@@ -2,13 +2,12 @@ import torch
 import os
 import numpy as np
 from pprint import pprint
-from tensorboardX import SummaryWriter
 from argparse import ArgumentParser
 from torch.utils.data import DataLoader
 from dataloader.simpleQA_dataloader import SimpleQADataset
 from model.SimpleQA import SimpleQA
-from utils.graph_util import build_graph_from_adj_matrix
-from utils.visualize import plot
+from utils.graph_util import build_graph_from_adj_matrix,get_seen_density
+from utils.visualize import plot_embedding,plot_density
 from utils.util import parse_args
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -34,6 +33,7 @@ def main(args):
 
     if args.use_gcn:
         args.relation_graphs = []
+        args.adj_matrix = []
         for pth in args.relation_adj_matrix_pth:
             adj_matrix = torch.load(pth)
             print('Relation Adj matrix loaded!')
@@ -45,6 +45,7 @@ def main(args):
                     adj_matrix[i][i] = 0
             g = build_graph_from_adj_matrix(adj_matrix,device)
             print('Done.')
+            args.adj_matrix.append(adj_matrix)
             args.relation_graphs.append(g)
         if args.graph_aggr == 'concat':
             args.sub_relation_dim = args.relation_dim // len(args.relation_graphs)
@@ -74,52 +75,67 @@ def main(args):
 
     base_data_dir = args.data_dir
     base_save_dir = args.save_dir
-
-    for i in range(args.fold):
-        train_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'train.tsv')
-        dev_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'dev.tsv')
-        test_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'test.tsv')
+    if args.dataset == 'base':
+        train_fname = os.path.join(base_data_dir,'base','train.tsv')
+        dev_fname = os.path.join(base_data_dir,'base','dev.tsv')
+        test_fname = os.path.join(base_data_dir,'base','test.tsv')
         train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(train_fname,dev_fname,test_fname,args.vocab_pth,args)
-        args.save_dir = os.path.join(base_save_dir,'fold-{}'.format(str(i)))
-        args.log_dir = os.path.join(args.save_dir,'logwriter')
-        args.writer = SummaryWriter(log_dir=args.log_dir)
-
-        train_relations = train_dataset.get_label_set()
-        args.seen_idx = list(train_relations)
-        args.unseen_idx = list(set([i  for i in range(len(vocab.rtoi))]) - set(args.seen_idx))
-        label_idx = np.zeros(len(vocab.rtoi))
-        label_idx[args.seen_idx] = 1
-
         if args.train:
-            print(' Training Fold {}'.format(i))
+            print(' Training On origin dataset...')
             train(args,train_dataset,dev_dataset,test_dataset,vocab,SimpleQADataset.collate_fn)
         elif args.evaluate:
-            with torch.no_grad():
-                print(' Test Fold {}'.format(i))
-                # All
-                test_micro_acc,test_macro_acc = evaluate(args,test_dataset,vocab,SimpleQADataset.collate_fn)
-                print('Test Acc :({:.2f},{:.2f})'.format(test_micro_acc*100,test_macro_acc*100))
+            test_micro_acc,test_macro_acc = evaluate(args,test_dataset,vocab,SimpleQADataset.collate_fn)
+            print(' Test Acc on origin dataset: {:.2f},{:.2f}'.format(test_micro_acc,test_macro_acc))
 
-                # Seen
-                train_relations = train_dataset.get_label_set()
-                seen_subset = test_dataset.get_subset(train_relations,'seen')
-                seen_micro_acc,seen_macro_acc = evaluate(args,seen_subset,vocab,SimpleQADataset.collate_fn)
-                print('Seen Acc :({:.2f},{:.2f})'.format(seen_micro_acc*100,seen_macro_acc*100))
+    elif args.dataset == 'mix':
+        for i in range(args.fold):
+            train_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'train.tsv')
+            dev_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'dev.tsv')
+            test_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'test.tsv')
+            train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(train_fname,dev_fname,test_fname,args.vocab_pth,args)
+            args.save_dir = os.path.join(base_save_dir,'fold-{}'.format(str(i)))
 
-                # Unseen
-                train_relations = train_dataset.get_label_set()
-                seen_subset = test_dataset.get_subset(train_relations,'unseen')
-                unseen_micro_acc,unseen_macro_acc = evaluate(args,seen_subset,vocab,SimpleQADataset.collate_fn)
-                print('UnSeen Acc :({:.2f},{:.2f})'.format(unseen_micro_acc*100,unseen_macro_acc*100))
-        elif args.visualize:
-            print(' Visualizing Fold {}'.format(i))
-            fname = os.path.join(args.save_dir,'embedding.png')
-            visualize(args,label_idx,vocab,fname)
+            train_relations = train_dataset.get_label_set()
+            args.seen_idx = list(train_relations)
+            args.unseen_idx = list(set([i  for i in range(len(vocab.rtoi))]) - set(args.seen_idx))
+            label_idx = np.zeros(len(vocab.rtoi))
+            label_idx[args.seen_idx] = 1
+
+            if args.train:
+                print(' Training Fold {}'.format(i))
+                train(args,train_dataset,dev_dataset,test_dataset,vocab,SimpleQADataset.collate_fn)
+            elif args.evaluate:
+                with torch.no_grad():
+                    print(' Test Fold {}'.format(i))
+                    # All
+                    test_micro_acc,test_macro_acc = evaluate(args,test_dataset,vocab,SimpleQADataset.collate_fn)
+                    print('Test Acc :({:.2f},{:.2f})'.format(test_micro_acc*100,test_macro_acc*100))
+
+                    # Seen
+                    train_relations = train_dataset.get_label_set()
+                    seen_subset = test_dataset.get_subset(train_relations,'seen')
+                    seen_micro_acc,seen_macro_acc = evaluate(args,seen_subset,vocab,SimpleQADataset.collate_fn)
+                    print('Seen Acc :({:.2f},{:.2f})'.format(seen_micro_acc*100,seen_macro_acc*100))
+
+                    # Unseen
+                    train_relations = train_dataset.get_label_set()
+                    seen_subset = test_dataset.get_subset(train_relations,'unseen')
+                    unseen_micro_acc,unseen_macro_acc = evaluate(args,seen_subset,vocab,SimpleQADataset.collate_fn)
+                    print('UnSeen Acc :({:.2f},{:.2f})'.format(unseen_micro_acc*100,unseen_macro_acc*100))
+            elif args.visualize:
+                print(' Visualizing Fold {}'.format(i))
+                fname = os.path.join(args.save_dir,'embedding.png')
+                visualize(args,label_idx,vocab,fname)
+            elif args.analysis:
+                print(' Analysis Fold {}'.format(i))
+                first_order_fname = os.path.join(args.save_dir,'first_order.png')
+                second_order_fname = os.path.join(args.save_dir,'second_order.png')
+                analysis(args,vocab,test_dataset,SimpleQADataset.collate_fn,first_order_fname,second_order_fname)
 
 
 def train(args,train_dataset,dev_dataset,test_dataset,vocab,collate_fn):
 
-    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=False,num_workers=12,collate_fn=collate_fn)
+    train_iter = DataLoader(dataset=train_dataset,batch_size=args.batch_size,shuffle=True,num_workers=12,collate_fn=collate_fn)
     dev_iter = DataLoader(dataset=dev_dataset,batch_size=32,shuffle=True,num_workers=12,collate_fn=collate_fn)
     test_iter = DataLoader(dataset=test_dataset,batch_size=32,shuffle=True,num_workers=12,collate_fn=collate_fn)
 
@@ -185,13 +201,12 @@ def visualize(args,labels,vocab,fname):
     if not args.use_gcn:
         relation_embedding = model.get_relation_embedding().detach().cpu().numpy()
     else:
-        relation_embedding = model.rgcn.layers[0].embedding.weight.detach().cpu().numpy()
-        # relation_embedding = model.get_relation_embedding().detach().cpu().numpy()
+        relation_embedding = model.get_relation_embedding().detach().cpu().numpy()
 
     # normalize
     # relation_embedding -= np.mean(relation_embedding,axis=0)
     np.savetxt('embedding.tsv',relation_embedding,delimiter='\t')
-    plot(relation_embedding,fname,labels)
+    plot_embedding(relation_embedding,fname,labels)
     array = [0 for i in range(len(vocab.rtoi))]
     for rel,idx in vocab.rtoi.items():
         array[idx] = (rel,labels[idx])
@@ -200,6 +215,33 @@ def visualize(args,labels,vocab,fname):
         f.write('Relation'+'\t'+'label'+'\n')
         for rel,label in array:
             f.write(rel + '\t' + str(label) + '\n')
+
+
+def analysis(args,vocab,test_dataset,collate_fn,first_order_fname,second_order_fname):
+    # Load Model
+    args.n_words = len(vocab.stoi)
+    args.n_relations = len(vocab.rtoi)
+    args.padding_idx = 0
+    model = SimpleQA(args).to(device)
+    model.load_state_dict(torch.load(os.path.join(args.save_dir,'model.pth')))
+
+    # Load Graph
+    adj_matrix = torch.load(args.relation_adj_matrix_pth[0])
+    first_order_seen_density = get_seen_density(adj_matrix,args.seen_idx,args.unseen_idx,order=1)
+    second_order_seen_density = get_seen_density(adj_matrix,args.seen_idx,args.unseen_idx,order=2)
+
+    # Load Dataset
+    test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=False,num_workers=12,collate_fn=collate_fn)
+    with torch.no_grad():
+        gold,pred = model.predict(test_iter)
+
+    plot_density(pred,gold,first_order_seen_density,args.seen_idx,first_order_fname)
+    plot_density(pred,gold,second_order_seen_density,args.seen_idx,second_order_fname)
+
+    # with open(os.path.join(args.save_dir,'test.errors'),'w') as f:
+    #     for i,(p,g) in enumerate(zip(pred,gold)):
+    #         if p != g:
+    #             f.write(test_dataset.get_raw_instance(i) + '\t' + )
 
 
 if __name__ == '__main__':
@@ -212,7 +254,8 @@ if __name__ == '__main__':
     args_parser.add_argument('--visualize',action="store_true",default=False)
     args_parser.add_argument('--analysis',action="store_true",default=False)
     args_parser.add_argument('--graph_aggr',type=str,default='concat')
-    args_parser.add_argument('--self_loop',default=True,)
+    args_parser.add_argument('--self_loop',default=False,)
+    args_parser.add_argument('--dataset',default='mix')
     args = parse_args(args_parser)
     pprint(vars(args))
 
@@ -222,5 +265,7 @@ if __name__ == '__main__':
         # SimpleQADataset.generate_embedding(args,device)
         SimpleQADataset.generate_relation_embedding(args,device)
         SimpleQADataset.generate_graph(args,device)
-    elif args.train or args.evaluate or args.visualize:
+    elif args.train or args.evaluate or args.visualize or args.analysis:
+        if args.visualize or args.analysis:
+            args.fold = 1
         main(args)
