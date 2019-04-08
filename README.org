@@ -1,0 +1,2 @@
+* Graph Convolutional Network Based Embedding Propagation for Zero-shot Relation Extraction
+
