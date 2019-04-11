@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from sklearn import metrics
+import numpy as np
 
 from utils.module import LSTMEncoder,mean_pool,max_pool,GateNetwork
 from utils.metric import micro_precision,macro_precision
@@ -30,6 +30,7 @@ class SimpleQA(nn.Module):
                     args.relation_pretrained,
                     args.num_hidden_layers,
                     args.rgcn_dropout,
+                    args.norm_type,
                     use_cuda=True
                 )
                 self.gcns.append(gcn)
@@ -163,8 +164,8 @@ class SimpleQA(nn.Module):
 
             gold.extend(relation[range(bsize),labels].tolist())
 
-            relation_mask = (1e9*(relation != 0) -1e9).float() # 1 -> 0, 0 -> -1e9
-            scores = self.forward(question,relation) # bsize * (1 + neg_num)
+            relation_mask = (1e9*(relation != 0) - 1e9).float()  # 1 -> 0, 0 -> -1e9
+            scores = self.forward(question,relation)  # bsize * (1 + neg_num)
             correct_idx = (scores+relation_mask).argmax(dim=1)
             pred.extend(relation[range(bsize),correct_idx].tolist())
             total += bsize
@@ -175,7 +176,9 @@ class SimpleQA(nn.Module):
         self.eval()
         total = 0
         pred = []
+        k_preds = []
         gold = []
+        ranks = []
         for batch in dev_iter:
             question = torch.tensor(batch['question']).to(device)
             relation = torch.tensor(batch['relation']).to(device)
@@ -184,10 +187,21 @@ class SimpleQA(nn.Module):
 
             gold.extend(relation[range(bsize),labels].tolist())
 
-            relation_mask = (1e9*(relation != 0) -1e9).float() # 1 -> 0, 0 -> -1e9
-            scores = self.forward(question,relation) # bsize * (1 + neg_num)
+            relation_mask = (1e9*(relation != 0) - 1e9).float()  # 1 -> 0, 0 -> -1e9
+            scores = self.forward(question,relation)  # bsize * (1 + neg_num)
             correct_idx = (scores+relation_mask).argmax(dim=1)
             pred.extend(relation[range(bsize),correct_idx].tolist())
+
+            k_largest_idx = (scores+relation_mask).topk(k=5,dim=1,sorted=True)[1]
+            kp = np.zeros((bsize,5))
+            for i in range(bsize):
+                for j in range(5):
+                    kp[i][j] = relation[i][k_largest_idx[i][j]]
+            k_preds.extend(kp.tolist())
+
+            rank_idx = ((scores+relation_mask).argsort(dim=1,descending=True).argsort(dim=1)[:,0]+1).tolist()
+
+            ranks.extend(rank_idx)
             total += bsize
 
-        return gold,pred
+        return gold,pred,k_preds,ranks
