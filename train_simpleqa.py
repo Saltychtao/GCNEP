@@ -1,6 +1,7 @@
 import torch
 import os
 import numpy as np
+import json
 from pprint import pprint
 from argparse import ArgumentParser
 from torch.utils.data import DataLoader
@@ -8,7 +9,7 @@ from dataloader.simpleQA_dataloader import SimpleQADataset
 from model.SimpleQA import SimpleQA
 from utils.graph_util import build_graph_from_adj_matrix,get_seen_density
 from utils.visualize import plot_embedding,plot_density
-from utils.util import parse_args
+from utils.util import parse_args,pairwise_distances
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -43,7 +44,7 @@ def main(args):
                 print('Removing Self-Loop')
                 for i in range(adj_matrix.shape[0]):
                     adj_matrix[i][i] = 0
-            g = build_graph_from_adj_matrix(adj_matrix,device)
+            g = build_graph_from_adj_matrix(adj_matrix,device,args.norm_type)
             print('Done.')
             args.adj_matrix.append(adj_matrix)
             args.relation_graphs.append(g)
@@ -92,14 +93,17 @@ def main(args):
             train_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'train.tsv')
             dev_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'dev.tsv')
             test_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'test.tsv')
-            train_dataset,dev_dataset,test_dataset = SimpleQADataset.load_dataset(train_fname,dev_fname,test_fname,args.vocab_pth,args)
+            test_seen_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'test_seen.tsv')
+            test_unseen_fname = os.path.join(base_data_dir,'fold-{}'.format(i),'test_unseen.tsv')
+            train_dataset,dev_dataset,test_dataset,test_seen_dataset,test_unseen_dataset = SimpleQADataset.load_dataset([train_fname,dev_fname,test_fname,test_seen_fname,test_unseen_fname],args.vocab_pth,args)
             args.save_dir = os.path.join(base_save_dir,'fold-{}'.format(str(i)))
 
             train_relations = train_dataset.get_label_set()
             args.seen_idx = list(train_relations)
-            args.unseen_idx = list(set([i  for i in range(len(vocab.rtoi))]) - set(args.seen_idx))
+            args.unseen_idx = list(set([i for i in range(len(vocab.rtoi))]) - set(args.seen_idx))
             label_idx = np.zeros(len(vocab.rtoi))
             label_idx[args.seen_idx] = 1
+            args.label_idx = label_idx
 
             if args.train:
                 print(' Training Fold {}'.format(i))
@@ -112,22 +116,18 @@ def main(args):
                     print('Test Acc :({:.2f},{:.2f})'.format(test_micro_acc*100,test_macro_acc*100))
 
                     # Seen
-                    train_relations = train_dataset.get_label_set()
-                    seen_subset = test_dataset.get_subset(train_relations,'seen')
-                    seen_micro_acc,seen_macro_acc = evaluate(args,seen_subset,vocab,SimpleQADataset.collate_fn)
+                    seen_micro_acc,seen_macro_acc = evaluate(args,test_seen_dataset,vocab,SimpleQADataset.collate_fn)
                     print('Seen Acc :({:.2f},{:.2f})'.format(seen_micro_acc*100,seen_macro_acc*100))
 
                     # Unseen
-                    train_relations = train_dataset.get_label_set()
-                    seen_subset = test_dataset.get_subset(train_relations,'unseen')
-                    unseen_micro_acc,unseen_macro_acc = evaluate(args,seen_subset,vocab,SimpleQADataset.collate_fn)
+                    unseen_micro_acc,unseen_macro_acc = evaluate(args,test_unseen_dataset,vocab,SimpleQADataset.collate_fn)
                     print('UnSeen Acc :({:.2f},{:.2f})'.format(unseen_micro_acc*100,unseen_macro_acc*100))
             elif args.visualize:
                 print(' Visualizing Fold {}'.format(i))
                 fname = os.path.join(args.save_dir,'embedding.png')
                 visualize(args,label_idx,vocab,fname)
             elif args.analysis:
-                print(' Analysis Fold {}'.format(i))
+                print(' Analyzing Fold {}'.format(i))
                 first_order_fname = os.path.join(args.save_dir,'first_order.png')
                 second_order_fname = os.path.join(args.save_dir,'second_order.png')
                 analysis(args,vocab,test_dataset,SimpleQADataset.collate_fn,first_order_fname,second_order_fname)
@@ -227,21 +227,56 @@ def analysis(args,vocab,test_dataset,collate_fn,first_order_fname,second_order_f
 
     # Load Graph
     adj_matrix = torch.load(args.relation_adj_matrix_pth[0])
-    first_order_seen_density = get_seen_density(adj_matrix,args.seen_idx,args.unseen_idx,order=1)
-    second_order_seen_density = get_seen_density(adj_matrix,args.seen_idx,args.unseen_idx,order=2)
 
     # Load Dataset
     test_iter = DataLoader(dataset=test_dataset,batch_size=args.batch_size,shuffle=False,num_workers=12,collate_fn=collate_fn)
     with torch.no_grad():
-        gold,pred = model.predict(test_iter)
+        gold,pred,k_preds,ranks = model.predict(test_iter)
+        # if not args.use_gcn:
+        #     relation_embedding = model.get_relation_embedding()
+        # else:
+        #     relation_embedding = model.get_relation_embedding()
+        # pdist = pairwise_distances(relation_embedding)
 
-    plot_density(pred,gold,first_order_seen_density,args.seen_idx,first_order_fname)
-    plot_density(pred,gold,second_order_seen_density,args.seen_idx,second_order_fname)
+    # first_order_seen_density = get_seen_density(adj_matrix,args.seen_idx,args.unseen_idx,order=1)
+    # second_order_seen_density = get_seen_density(adj_matrix,args.seen_idx,args.unseen_idx,order=2)
+    # plot_density(pred,gold,first_order_seen_density,args.seen_idx,first_order_fname)
+    # plot_density(pred,gold,second_order_seen_density,args.seen_idx,second_order_fname)
 
-    # with open(os.path.join(args.save_dir,'test.errors'),'w') as f:
-    #     for i,(p,g) in enumerate(zip(pred,gold)):
-    #         if p != g:
-    #             f.write(test_dataset.get_raw_instance(i) + '\t' + )
+    with open(os.path.join(args.save_dir,'test.errors'),'w') as f:
+        outputs = []
+        for i,(p,g,k,r) in enumerate(zip(pred,gold,k_preds,ranks)):
+            if p != g:
+                raw_line = test_dataset.get_raw_instance(i)
+                gold,neg,question = raw_line.rstrip().split('\t')
+                gold_relation = vocab.itor[g]
+                neg_relations = []
+                for n in neg.split():
+                    try:
+                        idx = int(n)
+                        neg_relations.append(vocab.itor[idx])
+                    except ValueError:
+                        pass
+                d = dict()
+                d['question'] = question
+                d['gold'] = gold_relation
+                d['gold_type'] = 'seen' if g in args.seen_idx else 'unseen'
+                d['pred'] = vocab.itor[p]
+                d['pred_type'] = 'seen' if p in args.seen_idx else 'unseen'
+                d['negative'] = ' '.join(neg_relations)
+                d['gold_neighbour_seen'] = (adj_matrix[g] * args.label_idx).sum()
+                d['gold_neighbour_unseen'] = (adj_matrix[g] * (1-args.label_idx)).sum()
+                d['gold_total_neighbour'] = adj_matrix[g].sum()
+                d['pred_neighbour_seen'] = (adj_matrix[p] * args.label_idx).sum()
+                d['pred_neighbour_unseen'] = (adj_matrix[p] * (1-args.label_idx)).sum()
+                d['pred_total_neighbour'] = adj_matrix[p].sum()
+                d['rank'] = r
+                d['top_five_relations'] = []
+                for j in k:
+                    t = (vocab.itor[j],'seen' if j in args.seen_idx else 'unseen',adj_matrix[int(j)].sum())
+                    d['top_five_relations'].append(t)
+                outputs.append(d)
+        json.dump(outputs,f,indent=4)
 
 
 if __name__ == '__main__':
@@ -256,6 +291,7 @@ if __name__ == '__main__':
     args_parser.add_argument('--graph_aggr',type=str,default='concat')
     args_parser.add_argument('--self_loop',default=False,)
     args_parser.add_argument('--dataset',default='mix')
+    args_parser.add_argument('--norm_type',default='spectral')
     args = parse_args(args_parser)
     pprint(vars(args))
 
@@ -267,5 +303,5 @@ if __name__ == '__main__':
         SimpleQADataset.generate_graph(args,device)
     elif args.train or args.evaluate or args.visualize or args.analysis:
         if args.visualize or args.analysis:
-            args.fold = 1
+            args.fold = 10
         main(args)
