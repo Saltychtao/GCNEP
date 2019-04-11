@@ -194,14 +194,17 @@ class SimpleQADataset(Dataset):
         }
 
     @staticmethod
-    def load_dataset(train_fname,dev_fname,test_fname,vocab_pth,args):
+    def load_dataset(fnames,vocab_pth,args):
         vocab = torch.load(vocab_pth,pickle_module=dill)
 
-        train_dataset = SimpleQADataset(train_fname,vocab,args.batch_size,args.ns)
-        dev_dataset = SimpleQADataset(dev_fname,vocab,args.batch_size,ns=0)
-        test_dataset = SimpleQADataset(test_fname,vocab,args.batch_size,ns=0)
+        datasets = []
+        for i,fname in enumerate(fnames):
+            if i == 0:
+                datasets.append(SimpleQADataset(fname,vocab,args.batch_size,args.ns))
+            else:
+                datasets.append(SimpleQADataset(fname,vocab,args.batch_size,ns=0))
 
-        return train_dataset, dev_dataset, test_dataset
+        return tuple(datasets)
 
     @staticmethod
     def load_vocab(args):
