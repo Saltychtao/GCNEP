@@ -68,12 +68,13 @@ class RGCNLayer(nn.Module):
 
 class RGCNTransLayer(RGCNLayer):
     @overrides
-    def __init__(self,in_feat,out_feat,activation,bias=None,self_loop=False,dropout=0.0):
+    def __init__(self,in_feat,out_feat,activation,bias=None,self_loop=False,dropout=0.0,norm_type='spectral'):
         super(RGCNTransLayer, self).__init__(in_feat,out_feat,bias,activation=None,self_loop=self_loop,dropout=dropout)
         self.linear = nn.Linear(in_feat,out_feat)
         self.activation = activation
         self.dropout = nn.Dropout(p=dropout)
         self.reset_parameters()
+        self.norm_type = norm_type
 
     def reset_parameters(self):
         stdv = 1. / math.sqrt(self.linear.weight.size(1))
@@ -86,15 +87,19 @@ class RGCNTransLayer(RGCNLayer):
         g.update_all(self.msg_func,fn.sum(msg='msg',out='h'),self.apply_func)
 
     def apply_func(self,nodes):
-        if self.activation is not None:
-            return {'h': self.activation(self.linear(self.dropout(nodes.data['h'])))}
+        if self.norm_type == 'gcn':
+            data = nodes.data['h'] * nodes.data['norm']
         else:
-            return {'h': self.linear(nodes.data['h'])}
+            data = nodes.data['h']
+        if self.activation is not None:
+            return {'h': self.activation(self.linear(self.dropout(data)))}
+        else:
+            return {'h': self.linear(data)}
 
 
 class BaseRGCN(nn.Module):
     def __init__(self, g,num_nodes, h_dim, out_dim,
-                 pretrained=None,num_hidden_layers=1, dropout=0, use_cuda=False):
+                 pretrained=None,num_hidden_layers=1, dropout=0, norm_type='spectral',use_cuda=False):
         super(BaseRGCN, self).__init__()
         self.num_nodes = num_nodes
         self.h_dim = h_dim
@@ -104,6 +109,7 @@ class BaseRGCN(nn.Module):
         self.use_cuda = use_cuda
         self.pretrained = pretrained
         self.g = g
+        self.norm_type = norm_type
 
         # create rgcn layers
         self.build_model()
@@ -166,4 +172,4 @@ class RGCN(BaseRGCN):
 
     def build_hidden_layer(self, idx):
         act = F.relu if idx < self.num_hidden_layers - 1 else None
-        return RGCNTransLayer(in_feat=self.h_dim,out_feat=self.h_dim,activation=act,self_loop=False,dropout=self.dropout)
+        return RGCNTransLayer(in_feat=self.h_dim,out_feat=self.h_dim,activation=act,self_loop=False,dropout=self.dropout,norm_type=self.norm_type)
